@@ -1,3 +1,14 @@
+From cfc4f8a87f353ab51a0e73657d427ff8fcf45410 Mon Sep 17 00:00:00 2001
+From: Nguyen Thanh Trung <nguyenthanh.trung@nomovok.vn>
+Date: Tue, 19 Nov 2013 16:21:46 +0700
+Subject: [PATCH] WMT changes to support WiFi dongles
+
+---
+ src/drivers/driver_wext.c |  179 +++++++++++++++++++++++++++++++++++++++++++--
+ src/drivers/driver_wext.h |   10 +++
+ wpa_supplicant/Android.mk |    6 ++
+ 3 files changed, 187 insertions(+), 8 deletions(-)
+
 diff --git a/src/drivers/driver_wext.c b/src/drivers/driver_wext.c
 index 001716e..101df22 100644
 --- a/src/drivers/driver_wext.c
@@ -246,3 +257,6 @@ index 3d65cc6..cfdca80 100644
  # To ignore possible wrong network configurations
  L_CFLAGS = -DWPA_IGNORE_CONFIG_ERRORS
  
+-- 
+1.7.9.5
+

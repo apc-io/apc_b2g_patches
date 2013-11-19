@@ -1,3 +1,14 @@
+From c2fb4434e58c7153b2e7402b12a599b1bf082498 Mon Sep 17 00:00:00 2001
+From: Nguyen Thanh Trung <nguyenthanh.trung@nomovok.vn>
+Date: Tue, 19 Nov 2013 16:19:44 +0700
+Subject: [PATCH] WMT Changes
+
+---
+ audio/AudioPolicyManagerBase.cpp |    4 +-
+ wifi/Android.mk                  |    9 +-
+ wifi/wifi.c                      |  495 ++++++++++++++++++++++++++++++++++++--
+ 3 files changed, 489 insertions(+), 19 deletions(-)
+
 diff --git a/audio/AudioPolicyManagerBase.cpp b/audio/AudioPolicyManagerBase.cpp
 index ac31ad4..96c4651 100644
 --- a/audio/AudioPolicyManagerBase.cpp
@@ -656,3 +667,6 @@ index 37cbb1e..c6c085e 100644
      if (!fwpath)
          return ret;
      fd = open(WIFI_DRIVER_FW_PATH_PARAM, O_WRONLY);
+-- 
+1.7.9.5
+

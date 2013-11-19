@@ -1,0 +1,2124 @@
+From 4bfb836ecb94ae492aa152e1cc6daea779201faa Mon Sep 17 00:00:00 2001
+From: FirefoxOS <firefoxos@FirefoxOS.(none)>
+Date: Tue, 19 Nov 2013 16:16:57 +0700
+Subject: [PATCH] WMT changes
+
+---
+ include/hardware/gralloc.h                 |   14 +
+ include/ump/ump.h                          |  268 +++++++++++++++++
+ include/ump/ump_debug.h                    |  287 +++++++++++++++++++
+ include/ump/ump_osu.h                      |  430 ++++++++++++++++++++++++++++
+ include/ump/ump_platform.h                 |   68 +++++
+ include/ump/ump_ref_drv.h                  |  109 +++++++
+ include/ump/ump_uk_types.h                 |  200 +++++++++++++
+ modules/ARM_gralloc/Android.mk             |   25 ++
+ modules/ARM_gralloc/alloc_device.h         |   22 ++
+ modules/ARM_gralloc/framebuffer_device.h   |   25 ++
+ modules/ARM_gralloc/gralloc.default.so     |  Bin 0 -> 13920 bytes
+ modules/ARM_gralloc/gralloc_helper.h       |   29 ++
+ modules/ARM_gralloc/gralloc_priv.h         |  178 ++++++++++++
+ modules/ARM_gralloc/gralloc_vsync_report.h |   42 +++
+ modules/Android.mk                         |    2 +-
+ modules/gralloc/Android.mk                 |   48 ++--
+ modules/gralloc/gralloc.android.so         |  Bin 0 -> 10180 bytes
+ 17 files changed, 1718 insertions(+), 29 deletions(-)
+ create mode 100644 include/ump/ump.h
+ create mode 100644 include/ump/ump_debug.h
+ create mode 100644 include/ump/ump_osu.h
+ create mode 100644 include/ump/ump_platform.h
+ create mode 100644 include/ump/ump_ref_drv.h
+ create mode 100644 include/ump/ump_uk_types.h
+ create mode 100644 modules/ARM_gralloc/Android.mk
+ create mode 100644 modules/ARM_gralloc/alloc_device.h
+ create mode 100644 modules/ARM_gralloc/framebuffer_device.h
+ create mode 100755 modules/ARM_gralloc/gralloc.default.so
+ create mode 100644 modules/ARM_gralloc/gralloc_helper.h
+ create mode 100644 modules/ARM_gralloc/gralloc_priv.h
+ create mode 100644 modules/ARM_gralloc/gralloc_vsync_report.h
+ create mode 100755 modules/gralloc/gralloc.android.so
+
+diff --git a/include/hardware/gralloc.h b/include/hardware/gralloc.h
+index f8beb5e..e178ebf 100644
+--- a/include/hardware/gralloc.h
++++ b/include/hardware/gralloc.h
+@@ -98,8 +98,22 @@ enum {
+     GRALLOC_USAGE_PRIVATE_2             = 0x40000000,
+     GRALLOC_USAGE_PRIVATE_3             = 0x80000000,
+     GRALLOC_USAGE_PRIVATE_MASK          = 0xF0000000,
++
++    /* wmt mb memory */
++    GRALLOC_USAGE_WMT_MB                = GRALLOC_USAGE_PRIVATE_0
+ };
+ 
++typedef struct 
++{
++    int     magic;      	//'WMMB'
++    long    phy_addr;      //physical address of mb memory
++    int     video_width;	//video width
++    int     video_height;   //video height
++	int     fb_width;		//aligned frame buffer width (>= video_width)
++	int     fb_height;      //aligned frame height
++	int     cookie;		    //
++}gralloc_mb_block;
++
+ /*****************************************************************************/
+ 
+ /**
+diff --git a/include/ump/ump.h b/include/ump/ump.h
+new file mode 100644
+index 0000000..a7b4f19
+--- /dev/null
++++ b/include/ump/ump.h
+@@ -0,0 +1,268 @@
++/*
++ * Copyright (C) 2010-2012 ARM Limited. All rights reserved.
++ * 
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ * 
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ * 
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/**
++ * @file ump.h
++ *
++ * This file contains the user space part of the UMP API.
++ */
++
++#ifndef _UNIFIED_MEMORY_PROVIDER_H_
++#define _UNIFIED_MEMORY_PROVIDER_H_
++
++
++/** @defgroup ump_user_space_api UMP User Space API
++ * @{ */
++
++
++#include "ump_platform.h"
++
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++
++/**
++ * External representation of a UMP handle in user space.
++ */
++typedef void * ump_handle;
++
++/**
++ * Typedef for a secure ID, a system wide identificator for UMP memory buffers.
++ */
++typedef unsigned int ump_secure_id;
++
++/**
++ * Value to indicate an invalid UMP memory handle.
++ */
++#define UMP_INVALID_MEMORY_HANDLE ((ump_handle)0)
++
++/**
++ * Value to indicate an invalid secure Id.
++ */
++#define UMP_INVALID_SECURE_ID     ((ump_secure_id)-1)
++
++/**
++ * UMP error codes for user space.
++ */
++typedef enum
++{
++	UMP_OK = 0, /**< indicates success */
++	UMP_ERROR,  /**< indicates failure */
++} ump_result;
++
++
++/**
++ * Opens and initializes the UMP library.
++ *
++ * This function must be called at least once before calling any other UMP API functions.
++ * Each open is reference counted and must be matched with a call to @ref ump_close "ump_close".
++ *
++ * @see ump_close
++ *
++ * @return UMP_OK indicates success, UMP_ERROR indicates failure.
++ */
++UMP_API_EXPORT ump_result ump_open(void);
++
++
++/**
++ * Terminate the UMP library.
++ *
++ * This must be called once for every successful @ref ump_open "ump_open". The UMP library is
++ * terminated when, and only when, the last open reference to the UMP interface is closed.
++ *
++ * @see ump_open
++ */
++UMP_API_EXPORT void ump_close(void);
++
++
++/**
++ * Retrieves the secure ID for the specified UMP memory.
++ *
++ * This identificator is unique across the entire system, and uniquely identifies
++ * the specified UMP memory. This identificator can later be used through the
++ * @ref ump_handle_create_from_secure_id "ump_handle_create_from_secure_id" or
++ * @ref ump_dd_handle_create_from_secure_id "ump_dd_handle_create_from_secure_id"
++ * functions in order to access this UMP memory, for instance from another process.
++ *
++ * @note There is a kernel space equivalent function called @ref ump_dd_secure_id_get "ump_dd_secure_id_get"
++ *
++ * @see ump_handle_create_from_secure_id
++ * @see ump_dd_handle_create_from_secure_id
++ * @see ump_dd_secure_id_get
++ *
++ * @param mem Handle to UMP memory.
++ *
++ * @return Returns the secure ID for the specified UMP memory.
++ */
++UMP_API_EXPORT ump_secure_id ump_secure_id_get(ump_handle mem);
++
++
++/**
++ * Retrieves a handle to allocated UMP memory.
++ *
++ * The usage of UMP memory is reference counted, so this will increment the reference
++ * count by one for the specified UMP memory.
++ * Use @ref ump_reference_release "ump_reference_release" when there is no longer any
++ * use for the retrieved handle.
++ *
++ * @note There is a kernel space equivalent function called @ref ump_dd_handle_create_from_secure_id "ump_dd_handle_create_from_secure_id"
++ *
++ * @see ump_reference_release
++ * @see ump_dd_handle_create_from_secure_id
++ *
++ * @param secure_id The secure ID of the UMP memory to open, that can be retrieved using the @ref ump_secure_id_get "ump_secure_id_get " function.
++ *
++ * @return UMP_INVALID_MEMORY_HANDLE indicates failure, otherwise a valid handle is returned.
++ */
++UMP_API_EXPORT ump_handle ump_handle_create_from_secure_id(ump_secure_id secure_id);
++
++
++/**
++ * Retrieves the actual size of the specified UMP memory.
++ *
++ * The size is reported in bytes, and is typically page aligned.
++ *
++ * @note There is a kernel space equivalent function called @ref ump_dd_size_get "ump_dd_size_get"
++ *
++ * @see ump_dd_size_get
++ *
++ * @param mem Handle to UMP memory.
++ *
++ * @return Returns the allocated size of the specified UMP memory, in bytes.
++ */
++UMP_API_EXPORT unsigned long ump_size_get(ump_handle mem);
++
++
++/**
++ * Read from specified UMP memory.
++ *
++ * Another way of reading from (and writing to) UMP memory is to use the
++ * @ref ump_mapped_pointer_get "ump_mapped_pointer_get" to retrieve
++ * a CPU mapped pointer to the memory.
++ *
++ * @see ump_mapped_pointer_get
++ *
++ * @param dst Destination buffer.
++ * @param src Handle to UMP memory to read from.
++ * @param offset Where to start reading, given in bytes.
++ * @param length How much to read, given in bytes.
++ */
++UMP_API_EXPORT void ump_read(void * dst, ump_handle src, unsigned long offset, unsigned long length);
++
++
++/**
++ * Write to specified UMP memory.
++ *
++ * Another way of writing to (and reading from) UMP memory is to use the
++ * @ref ump_mapped_pointer_get "ump_mapped_pointer_get" to retrieve
++ * a CPU mapped pointer to the memory.
++ *
++ * @see ump_mapped_pointer_get
++ *
++ * @param dst Handle to UMP memory to write to.
++ * @param offset Where to start writing, given in bytes.
++ * @param src Buffer to read from.
++ * @param length How much to write, given in bytes.
++ */
++UMP_API_EXPORT void ump_write(ump_handle dst, unsigned long offset, const void * src, unsigned long length);
++
++
++/**
++ * Retrieves a memory mapped pointer to the specified UMP memory.
++ *
++ * This function retrieves a memory mapped pointer to the specified UMP memory,
++ * that can be used by the CPU. Every successful call to
++ * @ref ump_mapped_pointer_get "ump_mapped_pointer_get" is reference counted,
++ * and must therefore be followed by a call to
++ * @ref ump_mapped_pointer_release "ump_mapped_pointer_release " when the
++ * memory mapping is no longer needed.
++ *
++ * @note Systems without a MMU for the CPU only return the physical address, because no mapping is required.
++ *
++ * @see ump_mapped_pointer_release
++ *
++ * @param mem Handle to UMP memory.
++ *
++ * @return NULL indicates failure, otherwise a CPU mapped pointer is returned.
++ */
++UMP_API_EXPORT void * ump_mapped_pointer_get(ump_handle mem);
++
++
++/**
++ * Releases a previously mapped pointer to the specified UMP memory.
++ *
++ * The CPU mapping of the specified UMP memory memory is reference counted,
++ * so every call to @ref ump_mapped_pointer_get "ump_mapped_pointer_get" must
++ * be matched with a call to this function when the mapping is no longer needed.
++ *
++ * The CPU mapping is not removed before all references to the mapping is released.
++ *
++ * @note Systems without a MMU must still implement this function, even though no unmapping should be needed.
++ *
++ * @param mem Handle to UMP memory.
++ */
++UMP_API_EXPORT void ump_mapped_pointer_release(ump_handle mem);
++
++
++/**
++ * Adds an extra reference to the specified UMP memory.
++ *
++ * This function adds an extra reference to the specified UMP memory. This function should
++ * be used every time a UMP memory handle is duplicated, that is, assigned to another ump_handle
++ * variable. The function @ref ump_reference_release "ump_reference_release" must then be used
++ * to release each copy of the UMP memory handle.
++ *
++ * @note You are not required to call @ref ump_reference_add "ump_reference_add"
++ * for UMP handles returned from
++ * @ref ump_handle_create_from_secure_id "ump_handle_create_from_secure_id",
++ * because these handles are already reference counted by this function.
++ *
++ * @note There is a kernel space equivalent function called @ref ump_dd_reference_add "ump_dd_reference_add"
++ *
++ * @see ump_dd_reference_add
++ *
++ * @param mem Handle to UMP memory.
++ */
++UMP_API_EXPORT void ump_reference_add(ump_handle mem);
++
++
++/**
++ * Releases a reference from the specified UMP memory.
++ *
++ * This function should be called once for every reference to the UMP memory handle.
++ * When the last reference is released, all resources associated with this UMP memory
++ * handle are freed.
++ *
++ * @note There is a kernel space equivalent function called @ref ump_dd_reference_release "ump_dd_reference_release"
++ *
++ * @see ump_dd_reference_release
++ *
++ * @param mem Handle to UMP memory.
++ */
++UMP_API_EXPORT void ump_reference_release(ump_handle mem);
++
++
++#ifdef __cplusplus
++}
++#endif
++
++
++/** @} */ /* end group ump_user_space_api */
++
++
++#endif /*_UNIFIED_MEMORY_PROVIDER_H_ */
+diff --git a/include/ump/ump_debug.h b/include/ump/ump_debug.h
+new file mode 100644
+index 0000000..5ede8a3
+--- /dev/null
++++ b/include/ump/ump_debug.h
+@@ -0,0 +1,287 @@
++/*
++ * Copyright (C) 2010-2011 ARM Limited. All rights reserved.
++ * 
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ * 
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ * 
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/**
++ * @file ump_debug.h
++ *
++ * The file include several useful macros for debugging and printing.
++ * - UMP_PRINTF(...)           Do not use this function: Will be included in Release builds.
++ * - UMP_DEBUG_TRACE()         Prints current location in code.
++ * - UMP_DEBUG_PRINT(nr, (X) ) Prints the second argument if nr<=UMP_DEBUG_LEVEL.
++ * - UMP_DEBUG_TPRINT(nr, X )  Prints the source trace and second argument if nr<=UMP_DEBUG_LEVEL.
++ * - UMP_DEBUG_ERROR( (X) )    Prints an errortext, a source trace, and the given error message.
++ * - UMP_DEBUG_ASSERT(exp,(X)) If the asserted expr is false, the program will exit.
++ * - UMP_DEBUG_ASSERT_RANGE(x, min, max) Triggers if variable x is not between or equal to max and min.
++ * - UMP_DEBUG_ASSERT_LEQ(x, max) Triggers if variable x is not less than equal to max.
++ * - UMP_DEBUG_ASSERT_POINTER(pointer)  Triggers if the pointer is a zero pointer.
++ * - UMP_DEBUG_CODE( X )       The code inside the macro is only copiled in Debug builds.
++ *
++ * The (X) means that you must add an extra parantese around the argumentlist.
++ *
++ * The  printf function: UMP_PRINTF(...) is routed to _ump_sys_printf
++ *
++ * Suggested range for the DEBUG-LEVEL is [1:6] where
++ * [1:2] Is messages with highest priority, indicate possible errors.
++ * [3:4] Is messages with medium priority, output important variables.
++ * [5:6] Is messages with low priority, used during extensive debugging.
++ *
++ */
++#ifndef _UMP_DEBUG_H_
++#define _UMP_DEBUG_H_
++
++#include <stdio.h>
++#include <stdlib.h>
++
++/* START: Configuration */
++#ifndef UMP_PRINTF
++	#define UMP_PRINTF printf
++#endif /* UMP_PRINTF */
++
++#ifndef UMP_PRINT_FLUSH
++	#define UMP_PRINT_FLUSH do {} while (0)
++#endif /* UMP_PRINT_FLUSH */
++
++#ifndef UMP_DEBUG_LEVEL
++    #define UMP_DEBUG_LEVEL 1
++#endif /* UMP_DEBUG_LEVEL */
++
++#ifndef UMP_DEBUG_ERROR_START_MSG
++    #define UMP_DEBUG_ERROR_START_MSG do {\
++    UMP_PRINTF("*********************************************************************\n");\
++    UMP_PRINT_FLUSH; } while (0)
++#endif /* UMP_DEBUG_ERROR_START_MSG */
++
++#ifndef UMP_DEBUG_ERROR_STOP_MSG
++    #define UMP_DEBUG_ERROR_STOP_MSG  do { UMP_PRINTF("\n"); UMP_PRINT_FLUSH; } while (0)
++#endif /* UMP_DEBUG_ERROR_STOP_MSG */
++
++#ifndef UMP_ASSERT_QUIT_CMD
++	#define UMP_ASSERT_QUIT_CMD    abort()
++#endif /* UMP_ASSERT_QUIT_CMD */
++/* STOP: Configuration */
++
++/**
++ *	The macro UMP_FUNCTION evaluates to the name of the function enclosing
++ *	this macro's usage, or "<unknown>" if not supported.
++ */
++#if (defined(__SYMBIAN32__) && defined(__ARMCC__)) || defined(_MSC_VER)
++#	define UMP_FUNCTION __FUNCTION__
++#elif __STDC__  && __STDC_VERSION__ >= 199901L
++#	define UMP_FUNCTION __FUNCTION__
++#elif defined(__GNUC__) && __GNUC__ >= 2
++#	define UMP_FUNCTION __FUNCTION__
++#elif defined(__func__)
++#	define UMP_FUNCTION __func__
++#else
++#	define UMP_FUNCTION "<unknown>"
++#endif
++
++/**
++ *	Explicitly ignore a parameter passed into a function, to suppress compiler warnings.
++ *	Should only be used with parameter names.
++ */
++#define UMP_IGNORE(x) (void)x
++
++/**
++ * @def     UMP_DEBUG_TRACE()
++ * @brief   Prints current location in code.
++ *          Can be turned off by defining UMP_DEBUG_SKIP_TRACE
++ */
++
++#ifndef UMP_DEBUG_SKIP_TRACE
++    #ifndef UMP_DEBUG_SKIP_PRINT_FUNCTION_NAME
++        #define UMP_DEBUG_TRACE()  do { UMP_PRINTF( "In file: "__FILE__ \
++                        "  function: %s()   line:%4d\n" , UMP_FUNCTION, __LINE__);  UMP_PRINT_FLUSH; } while (0)
++	#else
++        #define UMP_DEBUG_TRACE()  do { UMP_PRINTF( "In file: "__FILE__ "  line:%4d\n" , __LINE__);  UMP_PRINT_FLUSH; } while (0)
++	#endif /* UMP_DEBUG_SKIP_PRINT_FUNCTION_NAME */
++#else
++    #define UMP_DEBUG_TRACE()
++#endif /* UMP_DEBUG_SKIP_TRACE */
++
++/**
++ * @def     UMP_DEBUG_PRINT(nr, (X) )
++ * @brief   Prints the second argument if nr<=UMP_DEBUG_LEVEL.
++ *          Can be turned off by defining UMP_DEBUG_SKIP_PRINT
++ * @param   nr   If nr <= UMP_DEBUG_LEVEL, we print the text.
++ * @param   X  A parantese with the contents to be sent to UMP_PRINTF
++ */
++#ifndef UMP_DEBUG_SKIP_PRINT
++    #define UMP_DEBUG_PRINT(nr, X )  do { if ( nr<=UMP_DEBUG_LEVEL ) { UMP_PRINTF X ; UMP_PRINT_FLUSH; } } while (0)
++#else
++    #define UMP_DEBUG_PRINT(nr, X )
++#endif /* UMP_DEBUG_SKIP_PRINT */
++
++/**
++ * @def     UMP_DEBUG_TPRINT(nr, (X) )
++ * @brief   Prints the second argument if nr<=UMP_DEBUG_LEVEL.
++ *          Can be turned off by defining UMP_DEBUG_SKIP_TPRINT.
++ *          Can be shortened by defining UMP_DEBUG_TPRINT_SKIP_FUNCTION.
++ * @param   nr   If nr <= UMP_DEBUG_LEVEL, we print the text.
++ * @param   X  A parantese with the contents to be sent to UMP_PRINTF
++ */
++
++/* helper to handle if the function name should be included or not */
++#ifndef UMP_DEBUG_TPRINT_SKIP_FUNCTION
++    #define UMP_DEBUG_TPRINT_INTERN do {UMP_PRINTF( ""__FILE__" %s()%4d " , UMP_FUNCTION, __LINE__); UMP_PRINT_FLUSH; }  while (0)
++#else
++    #define UMP_DEBUG_TPRINT_INTERN do {UMP_PRINTF( ""__FILE__ "%4d " , __LINE__); UMP_PRINT_FLUSH; }  while (0)
++#endif /* UMP_DEBUG_TPRINT_SKIP_FUNCTION */
++
++#ifndef UMP_DEBUG_SKIP_TPRINT
++	#define UMP_DEBUG_TPRINT(nr, X ) \
++    do{\
++        if ( nr<=UMP_DEBUG_LEVEL )\
++        {\
++            UMP_DEBUG_TPRINT_INTERN;\
++            UMP_PRINTF X ;\
++            UMP_PRINT_FLUSH;\
++        }\
++    } while (0)
++#else
++    #define UMP_DEBUG_TPRINT(nr, X )
++#endif /* UMP_DEBUG_SKIP_TPRINT */
++
++/**
++ * @def     UMP_DEBUG_ERROR( (X) )
++ * @brief   Prints an errortext, a source Trace, and the given error message.
++ *          Prints filename, function, linenr, and the given error message.
++ *          The error message must be inside a second parantese.
++ *          The error message is written on a separate line, and a NL char is added.
++ *          Can be turned of by defining UMP_DEBUG_SKIP_ERROR;
++ *          You do not need to type the words ERROR in the message, since it will
++ *          be added anyway.
++ *
++ * @note    You should not end the text with a newline, since it is added by the macro.
++ * @note    You should not write "ERROR" in the text, since it is added by the macro.
++ * @param    X  A parantese with the contents to be sent to UMP_PRINTF
++ */
++
++#ifndef UMP_DEBUG_SKIP_ERROR
++    #define UMP_DEBUG_ERROR( X )  \
++        do{ \
++            UMP_DEBUG_ERROR_START_MSG;\
++            UMP_PRINTF("ERROR: ");\
++            UMP_PRINT_FLUSH;\
++            UMP_DEBUG_TRACE(); \
++            UMP_PRINTF X ; \
++            UMP_PRINT_FLUSH;\
++            UMP_DEBUG_ERROR_STOP_MSG;\
++        } while (0)
++#else
++    #define UMP_DEBUG_ERROR( X ) do{ ; } while ( 0 )
++#endif /* UMP_DEBUG_SKIP_ERROR */
++
++/**
++ * @def     UMP_DEBUG_ASSERT(expr, (X) )
++ * @brief   If the asserted expr is false, the program will exit.
++ *          Prints filename, function, linenr, and the given error message.
++ *          The error message must be inside a second parantese.
++ *          The error message is written on a separate line, and a NL char is added.
++ *          Can be turned of by defining UMP_DEBUG_SKIP_ERROR;
++ *          You do not need to type the words ASSERT in the message, since it will
++ *          be added anyway.
++ *
++ * @param    X  A parantese with the contents to be sent to UMP_PRINTF
++ *          Prints filename, function, linenr, and the error message
++ *          on a separte line. A newline char is added at the end.
++ *          Can be turned of by defining UMP_DEBUG_SKIP_ASSERT
++ * @param   expr  Will exit program if \a expr is false;
++ * @param   (X)  Text that will be written if the assertion toggles.
++ */
++
++#ifndef UMP_DEBUG_SKIP_ASSERT
++    #define UMP_DEBUG_ASSERT(expr, X ) \
++    do{\
++        if ( !(expr) ) \
++        { \
++                UMP_DEBUG_ERROR_START_MSG;\
++                UMP_PRINTF("ASSERT EXIT: ");\
++                UMP_PRINT_FLUSH;\
++                UMP_DEBUG_TRACE(); \
++                UMP_PRINTF X ; \
++                UMP_PRINT_FLUSH;\
++                UMP_DEBUG_ERROR_STOP_MSG;\
++                UMP_ASSERT_QUIT_CMD;\
++        }\
++    } while (0)
++#else
++	#define UMP_DEBUG_ASSERT(expr, X)
++#endif /* UMP_DEBUG_SKIP_ASSERT */
++
++
++/**
++ * @def     UMP_DEBUG_ASSERT_POINTER(pointer)
++ * @brief   If the asserted pointer is NULL, the program terminates and TRACE info is printed
++ *          The checking is disabled if "UMP_DEBUG_SKIP_ASSERT" is defined.
++ */
++#define UMP_DEBUG_ASSERT_POINTER(pointer) UMP_DEBUG_ASSERT(pointer, ("Null pointer " #pointer) )
++
++/**
++ * @def     UMP_DEBUG_ASSERT_HANDLE(handle)
++ * @brief   If the asserted handle is not a valid handle, the program terminates and TRACE info is printed
++ *          The checking is disabled if "UMP_DEBUG_SKIP_ASSERT" is defined.
++ */
++#define UMP_DEBUG_ASSERT_HANDLE(handle) UMP_DEBUG_ASSERT(UMP_NO_HANDLE != (handle), ("Invalid handle" #handle) )
++
++/**
++ * @def     UMP_DEBUG_ASSERT_ALIGNMENT(ptr, align)
++ * @brief   If the asserted pointer is  not aligned to align, the program terminates with trace info printed.
++ *          The checking is disabled if "UMP_DEBUG_SKIP_ASSERT" is defined.
++ */
++#ifndef UMP_DEBUG_SKIP_ASSERT
++	#define UMP_DEBUG_ASSERT_ALIGNMENT(ptr, align) do {                                                    \
++		UMP_DEBUG_ASSERT(0 == (align & (align - 1)), ("align %d is not a power-of-two", align));           \
++		UMP_DEBUG_ASSERT(0 == (((u32)(ptr)) & (align - 1)), ("ptr %p not aligned to %d bytes", (void*)ptr, align)); \
++		} while (0)
++#else
++	#define UMP_DEBUG_ASSERT_ALIGNMENT(ptr, align)
++#endif /* UMP_DEBUG_SKIP_ASSERT */
++
++/**
++ * @def     UMP_DEBUG_ASSERT_RANGE(x,min,max)
++ * @brief   If variable x is not between or equal to max and min, the assertion triggers.
++ *          The checking is disabled if "UMP_DEBUG_SKIP_ASSERT" is defined.
++ */
++#define UMP_DEBUG_ASSERT_RANGE(x, min, max) \
++	UMP_DEBUG_ASSERT( (x) >= (min) && (x) <= (max), \
++			   (#x " out of range (%2.2f)", (double)x ) \
++			 )
++
++/**
++ * @def     UMP_DEBUG_ASSERT_LEQ(x,max)
++ * @brief   If variable x is less than or equal to max, the assertion triggers.
++ *          The checking is disabled if "UMP_DEBUG_SKIP_ASSERT" is defined.
++ */
++#define UMP_DEBUG_ASSERT_LEQ(x, max) \
++	UMP_DEBUG_ASSERT( (x) <= (max), \
++			   (#x " out of range (%2.2f)", (double)x ) \
++			 )
++
++/**
++ * @def     UMP_DEBUG_CODE( X )
++ * @brief   Run the code X on debug builds.
++ *          The code will not be used if UMP_DEBUG_SKIP_CODE is defined .
++ *
++ */
++#ifdef UMP_DEBUG_SKIP_CODE
++    #define UMP_DEBUG_CODE( X )
++#else
++    #define UMP_DEBUG_CODE( X ) X
++#endif /* UMP_DEBUG_SKIP_CODE */
++
++#endif /* _UMP_DEBUG_H_ */
++
+diff --git a/include/ump/ump_osu.h b/include/ump/ump_osu.h
+new file mode 100644
+index 0000000..6b82484
+--- /dev/null
++++ b/include/ump/ump_osu.h
+@@ -0,0 +1,430 @@
++/*
++ * Copyright (C) 2010-2012 ARM Limited. All rights reserved.
++ * 
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ * 
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ * 
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/**
++ * @file ump_osu.h
++ * Defines the OS abstraction layer for the base driver
++ */
++
++#ifndef __UMP_OSU_H__
++#define __UMP_OSU_H__
++
++#include <stdarg.h>
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++
++typedef unsigned int u32;
++#ifdef _MSC_VER
++        typedef unsigned __int64        u64;
++        typedef signed   __int64        s64;
++#else
++        typedef unsigned long long      u64;
++        typedef signed long long        s64;
++#endif
++
++#ifndef NULL
++#define NULL ((void*)0)
++#endif
++
++typedef unsigned long ump_bool;
++
++#ifndef UMP_TRUE
++#define UMP_TRUE ((ump_bool)1)
++#endif
++
++#ifndef UMP_FALSE
++#define UMP_FALSE ((ump_bool)0)
++#endif
++
++#define UMP_STATIC          static
++
++/**
++ * @addtogroup ump_user_space_api Unified Device Driver (UDD) APIs used by UMP
++ *
++ * @{
++ */
++
++/**
++ * @defgroup ump_osuapi UDD OS Abstraction for User-side (OSU) APIs for UMP
++ *
++ * @{
++ */
++
++/* The following is necessary to prevent the _ump_osk_errcode_t doxygen from
++ * becoming unreadable: */
++/** @cond OSU_COPY_OF__UMP_OSU_ERRCODE_T */
++
++/**
++ * @brief OSU/OSK Error codes.
++ *
++ * Each OS may use its own set of error codes, and may require that the
++ * User/Kernel interface take certain error code. This means that the common
++ * error codes need to be sufficiently rich to pass the correct error code
++ * through from the OSK/OSU to U/K layer, across all OSs.
++ *
++ * The result is that some error codes will appear redundant on some OSs.
++ * Under all OSs, the OSK/OSU layer must translate native OS error codes to
++ * _ump_osk/u_errcode_t codes. Similarly, the U/K layer must translate from
++ * _ump_osk/u_errcode_t codes to native OS error codes.
++ *
++ */
++typedef enum
++{
++	_UMP_OSK_ERR_OK = 0,              /**< Success. */
++	_UMP_OSK_ERR_FAULT = -1,          /**< General non-success */
++	_UMP_OSK_ERR_INVALID_FUNC = -2,   /**< Invalid function requested through User/Kernel interface (e.g. bad IOCTL number) */
++	_UMP_OSK_ERR_INVALID_ARGS = -3,   /**< Invalid arguments passed through User/Kernel interface */
++	_UMP_OSK_ERR_NOMEM = -4,          /**< Insufficient memory */
++	_UMP_OSK_ERR_TIMEOUT = -5,        /**< Timeout occured */
++	_UMP_OSK_ERR_RESTARTSYSCALL = -6, /**< Special: On certain OSs, must report when an interruptable mutex is interrupted. Ignore otherwise. */
++	_UMP_OSK_ERR_ITEM_NOT_FOUND = -7, /**< Table Lookup failed */
++	_UMP_OSK_ERR_BUSY = -8,           /**< Device/operation is busy. Try again later */
++	_UMP_OSK_ERR_UNSUPPORTED = -9,	/**< Optional part of the interface used, and is unsupported */
++} _ump_osk_errcode_t;
++
++/** @endcond */ /* end cond OSU_COPY_OF__UMP_OSU_ERRCODE_T */
++
++/**
++ * @brief OSU Error codes.
++ *
++ * OSU error codes - enum values intentionally same as OSK
++ */
++typedef enum
++{
++	_UMP_OSU_ERR_OK = 0,           /**< Success. */
++	_UMP_OSU_ERR_FAULT = -1,       /**< General non-success */
++	_UMP_OSU_ERR_TIMEOUT = -2,     /**< Timeout occured */
++} _ump_osu_errcode_t;
++
++/** @brief Translate OSU error code to base driver error code.
++ *
++ * The _UMP_OSU_TRANSLATE_ERROR macro translates an OSU error code to the
++ * error codes in use by the base driver.
++ */
++#define _UMP_OSU_TRANSLATE_ERROR(_ump_osu_errcode) ( ( _UMP_OSU_ERR_OK == (_ump_osu_errcode) ) ? UMP_ERR_NO_ERROR : UMP_ERR_FUNCTION_FAILED)
++
++/** @defgroup _ump_osu_lock OSU Mutual Exclusion Locks
++  * @{ */
++
++/** @brief OSU Mutual Exclusion Lock flags type.
++ *
++ * This is made to look like and function identically to the OSK locks (refer
++ * to \ref _ump_osk_lock). However, please note the following \b important
++ * differences:
++ * - the OSU default lock is a Sleeping, non-interruptible mutex.
++ * - the OSU adds the ANYUNLOCK type of lock which allows a thread which doesn't
++ * own the lock to release the lock.
++ * - the order parameter when creating a lock is currently unused
++ *
++ * @note Pay careful attention to the difference in default locks for OSU and
++ * OSK locks; OSU locks are always non-interruptible, but OSK locks are by
++ * default, interruptible. This has implications for systems that do not
++ * distinguish between user and kernel mode.
++ */
++typedef enum
++{
++	_UMP_OSU_LOCKFLAG_DEFAULT = 0, /**< Default lock type. */
++	/** @enum _ump_osu_lock_flags_t
++	 *
++	 * Flags from 0x0--0x8000 are RESERVED for Kernel-mode
++	 */
++	_UMP_OSU_LOCKFLAG_ANYUNLOCK = 0x10000, /**< Mutex that guarantees that any thread can unlock it when locked. Otherwise, this will not be possible. */
++	/** @enum _ump_osu_lock_flags_t
++	 *
++	 * Flags from 0x10000 are RESERVED for User-mode
++	 */
++	_UMP_OSU_LOCKFLAG_STATIC = 0x20000, /* Flag in OSU reserved range to identify lock as a statically initialized lock */
++
++ } _ump_osu_lock_flags_t;
++
++typedef enum
++{
++	_UMP_OSU_LOCKMODE_UNDEF = -1,  /**< Undefined lock mode. For internal use only */
++	_UMP_OSU_LOCKMODE_RW    = 0x0, /**< Default. Lock is used to protect data that is read from and written to */
++	/** @enum _ump_osu_lock_mode_t
++	 *
++	 * Lock modes 0x1--0x3F are RESERVED for Kernel-mode */
++} _ump_osu_lock_mode_t;
++
++/** @brief Private type for Mutual Exclusion lock objects. */
++typedef struct _ump_osu_lock_t_struct _ump_osu_lock_t;
++
++/** @brief The number of static locks supported in _ump_osu_lock_static(). */
++#define UMP_OSU_STATIC_LOCK_COUNT (sizeof(_ump_osu_static_locks) / sizeof(_ump_osu_lock_t))
++
++/** @} */ /* end group _ump_osu_lock */
++
++/** @defgroup _ump_osu_memory OSU Memory Allocation
++ * @{ */
++
++/** @brief Allocate zero-initialized memory.
++ *
++ * Returns a buffer capable of containing at least \a n elements of \a size
++ * bytes each. The buffer is initialized to zero.
++ *
++ * The buffer is suitably aligned for storage and subsequent access of every
++ * type that the compiler supports. Therefore, the pointer to the start of the
++ * buffer may be cast into any pointer type, and be subsequently accessed from
++ * such a pointer, without loss of information.
++ *
++ * When the buffer is no longer in use, it must be freed with _ump_osu_free().
++ * Failure to do so will cause a memory leak.
++ *
++ * @note Most toolchains supply memory allocation functions that meet the
++ * compiler's alignment requirements.
++ *
++ * @param n Number of elements to allocate
++ * @param size Size of each element
++ * @return On success, the zero-initialized buffer allocated. NULL on failure
++ */
++void *_ump_osu_calloc( u32 n, u32 size );
++
++/** @brief Allocate memory.
++ *
++ * Returns a buffer capable of containing at least \a size bytes. The
++ * contents of the buffer are undefined.
++ *
++ * The buffer is suitably aligned for storage and subsequent access of every
++ * type that the compiler supports. Therefore, the pointer to the start of the
++ * buffer may be cast into any pointer type, and be subsequently accessed from
++ * such a pointer, without loss of information.
++ *
++ * When the buffer is no longer in use, it must be freed with _ump_osu_free().
++ * Failure to do so will cause a memory leak.
++ *
++ * @note Most toolchains supply memory allocation functions that meet the
++ * compiler's alignment requirements.
++ *
++ * Remember to free memory using _ump_osu_free().
++ * @param size Number of bytes to allocate
++ * @return On success, the buffer allocated. NULL on failure.
++ */
++void *_ump_osu_malloc( u32 size );
++
++/** @brief Free memory.
++ *
++ * Reclaims the buffer pointed to by the parameter \a ptr for the system.
++ * All memory returned from _ump_osu_malloc(), _ump_osu_calloc() and
++ * _ump_osu_realloc() must be freed before the application exits. Otherwise,
++ * a memory leak will occur.
++ *
++ * Memory must be freed once. It is an error to free the same non-NULL pointer
++ * more than once.
++ *
++ * It is legal to free the NULL pointer.
++ *
++ * @param ptr Pointer to buffer to free
++ */
++void _ump_osu_free( void *ptr );
++
++/** @brief Copies memory.
++ *
++ * Copies the \a len bytes from the buffer pointed by the parameter \a src
++ * directly to the buffer pointed by \a dst.
++ *
++ * It is an error for \a src to overlap \a dst anywhere in \a len bytes.
++ *
++ * @param dst Pointer to the destination array where the content is to be
++ * copied.
++ * @param src Pointer to the source of data to be copied.
++ * @param len Number of bytes to copy.
++ * @return \a dst is always passed through unmodified.
++ */
++void *_ump_osu_memcpy( void *dst, const void *src, u32	len );
++
++/** @brief Fills memory.
++ *
++ * Sets the first \a size bytes of the block of memory pointed to by \a ptr to
++ * the specified value
++ * @param ptr Pointer to the block of memory to fill.
++ * @param chr Value to be set, passed as u32. Only the 8 Least Significant Bits (LSB)
++ * are used.
++ * @param size Number of bytes to be set to the value.
++ * @return \a ptr is always passed through unmodified
++ */
++void *_ump_osu_memset( void *ptr, u32 chr, u32 size );
++
++/** @} */ /* end group _ump_osu_memory */
++
++
++/** @addtogroup _ump_osu_lock
++ * @{ */
++
++/** @brief Initialize a Mutual Exclusion Lock.
++ *
++ * Locks are created in the signalled (unlocked) state.
++ *
++ * The parameter \a initial must be zero.
++ *
++ * At present, the parameter \a order must be zero. It remains for future
++ * expansion for mutex order checking.
++ *
++ * @param flags flags combined with bitwise OR ('|'), or zero. There are
++ * restrictions on which flags can be combined, see \ref _ump_osu_lock_flags_t.
++ * @param initial For future expansion into semaphores. SBZ.
++ * @param order The locking order of the mutex. SBZ.
++ * @return On success, a pointer to a \ref _ump_osu_lock_t object. NULL on failure.
++ */
++_ump_osu_lock_t *_ump_osu_lock_init( _ump_osu_lock_flags_t flags, u32 initial, u32 order );
++
++/** @brief Obtain a statically initialized Mutual Exclusion Lock.
++ *
++ * Retrieves a reference to a statically initialized lock. Up to
++ * _UMP_OSU_STATIC_LOCK_COUNT statically initialized locks are
++ * available. Only _ump_osu_lock_wait(), _ump_osu_lock_trywait(),
++ * _ump_osu_lock_signal() can be used with statically initialized locks.
++ * _UMP_OSU_LOCKMODE_RW mode should be used when waiting and signalling
++ * statically initialized locks.
++ *
++ * For the same \a nr a pointer to the same statically initialized lock is
++ * returned. That is, given the following code:
++ * @code
++ *	extern u32 n;
++ *
++ * 	_ump_osu_lock_t *locka = _ump_osu_lock_static(n);
++ *	_ump_osu_lock_t *lockb = _ump_osu_lock_static(n);
++ * @endcode
++ * Then (locka == lockb), for all 0 <= n < UMP_OSU_STATIC_LOCK_COUNT.
++ *
++ * @param nr index of a statically initialized lock [0..UMP_OSU_STATIC_LOCK_COUNT-1]
++ * @return On success, a pointer to a _ump_osu_lock_t object. NULL on failure.
++ */
++_ump_osu_lock_t *_ump_osu_lock_static( u32 nr );
++
++/** @brief Initialize a Mutual Exclusion Lock safely across multiple threads.
++ *
++ * The _ump_osu_lock_auto_init() function guarantees that the given lock will
++ * be initialized once and precisely once, even in a situation involving
++ * multiple threads.
++ *
++ * This is necessary because the first call to certain Public API functions must
++ * initialize the API. However, there can be a race involved to call the first
++ * library function in multi-threaded applications. To resolve this race, a
++ * mutex can be used. This mutex must be initialized, but initialized only once
++ * by any thread that might compete for its initialization. This function
++ * guarantees the initialization to happen correctly, even when there is an
++ * initialization race between multiple threads.
++ *
++ * Otherwise, the operation is identical to the _ump_osu_lock_init() function.
++ * For more details, refer to _ump_osu_lock_init().
++ *
++ * @param pplock pointer to storage for a _ump_osu_lock_t pointer. This
++ * _ump_osu_lock_t pointer may point to a _ump_osu_lock_t that has been
++ * initialized already
++ * @param flags flags combined with bitwise OR ('|'), or zero. There are
++ * restrictions on which flags can be combined. Refer to
++ * \ref _ump_osu_lock_flags_t for more information.
++ * The absence of any flags (the value 0) results in a sleeping-mutex,
++ * which is non-interruptible.
++ * @param initial For future expansion into semaphores. SBZ.
++ * @param order The locking order of the mutex. SBZ.
++ * @return On success, _UMP_OSU_ERR_OK is returned and a pointer to an
++ * initialized \ref _ump_osu_lock_t object is written into \a *pplock.
++ * _UMP_OSU_ERR_FAULT is returned on failure.
++ */
++_ump_osu_errcode_t _ump_osu_lock_auto_init( _ump_osu_lock_t **pplock, _ump_osu_lock_flags_t flags, u32 initial, u32 order );
++
++/** @brief Wait for a lock to be signalled (obtained).
++ *
++ * After a thread has successfully waited on the lock, the lock is obtained by
++ * the thread, and is marked as unsignalled. The thread releases the lock by
++ * signalling it.
++ *
++ * To prevent deadlock, locks must always be obtained in the same order.
++ *
++ * @param lock the lock to wait upon (obtain).
++ * @param mode the mode in which the lock should be obtained. Currently this
++ * must be _UMP_OSU_LOCKMODE_RW.
++ * @return On success, _UMP_OSU_ERR_OK, _UMP_OSU_ERR_FAULT on error.
++ */
++_ump_osu_errcode_t _ump_osu_lock_wait( _ump_osu_lock_t *lock, _ump_osu_lock_mode_t mode);
++
++/** @brief Wait for a lock to be signalled (obtained) with timeout
++ *
++ * After a thread has successfully waited on the lock, the lock is obtained by
++ * the thread, and is marked as unsignalled. The thread releases the lock by
++ * signalling it.
++ *
++ * To prevent deadlock, locks must always be obtained in the same order.
++ *
++ * This version can return early if it cannot obtain the lock within the given timeout.
++ *
++ * @param lock the lock to wait upon (obtain).
++ * @param mode the mode in which the lock should be obtained. Currently this
++ * must be _UMP_OSU_LOCKMODE_RW.
++ * @param timeout Relative time in microseconds for the timeout
++ * @return _UMP_OSU_ERR_OK if the lock was obtained, _UMP_OSU_ERR_TIMEOUT if the timeout expired or  _UMP_OSU_ERR_FAULT on error.
++ */
++_ump_osu_errcode_t _ump_osu_lock_timed_wait( _ump_osu_lock_t *lock, _ump_osu_lock_mode_t mode, u64 timeout);
++
++/** @brief Test for a lock to be signalled and obtains the lock when so.
++ *
++ * Obtains the lock only when it is in signalled state. The lock is then
++ * marked as unsignalled. The lock is released again by signalling
++ * it by _ump_osu_lock_signal().
++ *
++ * If the lock could not be obtained immediately (that is, another thread
++ * currently holds the lock), then this function \b does \b not wait for the
++ * lock to be in a signalled state. Instead, an error code is immediately
++ * returned to indicate that the thread could not obtain the lock.
++ *
++ * To prevent deadlock, locks must always be obtained in the same order.
++ *
++ * @param lock the lock to wait upon (obtain).
++ * @param mode the mode in which the lock should be obtained. Currently this
++ * must be _UMP_OSU_LOCKMODE_RW.
++ * @return When the lock was obtained, _UMP_OSU_ERR_OK. If the lock could not
++ * be obtained, _UMP_OSU_ERR_FAULT.
++ */
++_ump_osu_errcode_t _ump_osu_lock_trywait( _ump_osu_lock_t *lock, _ump_osu_lock_mode_t mode);
++
++/** @brief Signal (release) a lock.
++ *
++ * Locks may only be signalled by the thread that originally waited upon the
++ * lock, unless the lock was created using the _UMP_OSU_LOCKFLAG_ANYUNLOCK flag.
++ *
++ * @param lock the lock to signal (release).
++ * @param mode the mode in which the lock should be obtained. This must match
++ * the mode in which the lock was waited upon.
++ */
++void _ump_osu_lock_signal( _ump_osu_lock_t *lock, _ump_osu_lock_mode_t mode );
++
++/** @brief Terminate a lock.
++ *
++ * This terminates a lock and frees all associated resources.
++ *
++ * It is a programming error to terminate the lock when it is held (unsignalled)
++ * by a thread.
++ *
++ * @param lock the lock to terminate.
++ */
++void _ump_osu_lock_term( _ump_osu_lock_t *lock );
++/** @} */ /* end group _ump_osu_lock */
++
++/** @} */ /* end group osuapi */
++
++/** @} */ /* end group uddapi */
++
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* __UMP_OSU_H__ */
+diff --git a/include/ump/ump_platform.h b/include/ump/ump_platform.h
+new file mode 100644
+index 0000000..68e01be
+--- /dev/null
++++ b/include/ump/ump_platform.h
+@@ -0,0 +1,68 @@
++/*
++ * Copyright (C) 2010-2011 ARM Limited. All rights reserved.
++ * 
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ * 
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ * 
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/**
++ * @file ump_platform.h
++ *
++ * This file should define UMP_API_EXPORT,
++ * which dictates how the UMP user space API should be exported/imported.
++ * Modify this file, if needed, to match your platform setup.
++ */
++
++#ifndef __UMP_PLATFORM_H__
++#define __UMP_PLATFORM_H__
++
++/** @addtogroup ump_user_space_api
++ * @{ */
++
++/**
++ * A define which controls how UMP user space API functions are imported and exported.
++ * This define should be set by the implementor of the UMP API.
++ */
++#if defined(_WIN32)
++
++#define UMP_API_EXPORT
++
++#elif defined(__SYMBIAN32__)
++
++#define UMP_API_EXPORT IMPORT_C
++
++#else
++
++#if defined(__GNUC__)
++#if __GNUC__ >= 4
++#	define MALI_VISIBLE  __attribute__ ((visibility ("default")))		/**< Function should be visible from outside the dll */	
++#else
++#	define MALI_VISIBLE
++#endif
++
++#elif defined(__ARMCC_VERSION)
++/* ARMCC specific */
++#	define MALI_VISIBLE  __declspec(dllexport)
++
++#else
++#	define MALI_VISIBLE
++
++#endif
++
++#define UMP_API_EXPORT MALI_VISIBLE
++
++#endif
++
++/** @} */ /* end group ump_user_space_api */
++
++
++#endif /* __UMP_PLATFORM_H__ */
+diff --git a/include/ump/ump_ref_drv.h b/include/ump/ump_ref_drv.h
+new file mode 100644
+index 0000000..4a46cfb
+--- /dev/null
++++ b/include/ump/ump_ref_drv.h
+@@ -0,0 +1,109 @@
++/*
++ * Copyright (C) 2010, 2012 ARM Limited. All rights reserved.
++ * 
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ * 
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ * 
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/**
++ * @file ump_ref_drv.h
++ *
++ * Reference driver extensions to the UMP user space API for allocating UMP memory
++ */
++
++#ifndef _UNIFIED_MEMORY_PROVIDER_REF_DRV_H_
++#define _UNIFIED_MEMORY_PROVIDER_REF_DRV_H_
++
++#include "ump.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef enum
++{
++	/* This enum must match with the IOCTL enum in ump_ioctl.h */
++	UMP_REF_DRV_CONSTRAINT_NONE = 0,
++	UMP_REF_DRV_CONSTRAINT_PHYSICALLY_LINEAR = 1,
++	UMP_REF_DRV_CONSTRAINT_USE_CACHE = 4,
++} ump_alloc_constraints;
++
++/** Allocate an UMP handle containing a memory buffer.
++ * Input: Size: The minimum size for the allocation.
++ * Usage: If this is UMP_REF_DRV_CONSTRAINT_USE_CACHE, the allocation is mapped as cached by the cpu.
++ *        If it is UMP_REF_DRV_CONSTRAINT_NONE it is mapped as noncached.
++ *        The flag UMP_REF_DRV_CONSTRAINT_PHYSICALLY_LINEAR is not supported.*/
++UMP_API_EXPORT ump_handle ump_ref_drv_allocate(unsigned long size, ump_alloc_constraints usage);
++
++typedef enum
++{
++	UMP_MSYNC_CLEAN = 0 ,
++	UMP_MSYNC_CLEAN_AND_INVALIDATE = 1,
++	UMP_MSYNC_INVALIDATE = 2,
++	UMP_MSYNC_READOUT_CACHE_ENABLED = 128,
++} ump_cpu_msync_op;
++
++typedef enum
++{
++	UMP_READ = 1,
++	UMP_READ_WRITE = 3,
++} ump_lock_usage;
++
++/** Flushing cache for an ump_handle.
++ * The function will always CLEAN_AND_INVALIDATE as long as the \a op is not UMP_MSYNC_READOUT_CACHE_ENABLED.
++ * If so it will only report back if the given ump_handle is cacheable.
++ * At the momement the implementation does not use \a address or \a size.
++ * Return value is 1 if cache is enabled, and 0 if it is disabled for the given allocation.*/
++UMP_API_EXPORT int ump_cpu_msync_now(ump_handle mem, ump_cpu_msync_op op, void* address, int size);
++
++
++typedef enum
++{
++	UMP_USED_BY_CPU = 0,
++	UMP_USED_BY_MALI = 1,
++	UMP_USED_BY_UNKNOWN_DEVICE = 100,
++} ump_hw_usage;
++
++typedef enum
++{
++	UMP_CACHE_OP_START = 0,
++	UMP_CACHE_OP_FINISH  = 1,
++} ump_cache_op_control;
++
++/** Cache operation control. Tell when cache maintenance operations start and end.
++This will allow the kernel to merge cache operations togheter, thus making them faster */
++UMP_API_EXPORT int ump_cache_operations_control(ump_cache_op_control op);
++
++/** Memory synchronization - cache flushing if previous user was different hardware */
++UMP_API_EXPORT int ump_switch_hw_usage( ump_handle mem, ump_hw_usage new_user );
++
++/** Memory synchronization - cache flushing if previous user was different hardware */
++UMP_API_EXPORT int ump_switch_hw_usage_secure_id( ump_secure_id ump_id, ump_hw_usage new_user );
++
++/** Locking buffer. Blocking call if the buffer is already locked. */
++UMP_API_EXPORT int ump_lock( ump_handle mem, ump_lock_usage lock_usage );
++
++/** Locking buffer. Blocking call if the buffer is already locked. */
++UMP_API_EXPORT int ump_lock_secure_id( ump_secure_id ump_id, ump_lock_usage lock_usage );
++
++/** Unlocking buffer. Let other users lock the buffer for their usage */
++UMP_API_EXPORT int ump_unlock( ump_handle mem );
++
++/** Unlocking buffer. Let other users lock the buffer for their usage */
++UMP_API_EXPORT int ump_unlock_secure_id( ump_secure_id ump_id );
++
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /*_UNIFIED_MEMORY_PROVIDER_REF_DRV_H_ */
+diff --git a/include/ump/ump_uk_types.h b/include/ump/ump_uk_types.h
+new file mode 100644
+index 0000000..fac23f4
+--- /dev/null
++++ b/include/ump/ump_uk_types.h
+@@ -0,0 +1,200 @@
++/*
++ * Copyright (C) 2010, 2012 ARM Limited. All rights reserved.
++ * 
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ * 
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ * 
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/**
++ * @file ump_uk_types.h
++ * Defines the types and constants used in the user-kernel interface
++ */
++
++#ifndef __UMP_UK_TYPES_H__
++#define __UMP_UK_TYPES_H__
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++/* Helpers for API version handling */
++#define MAKE_VERSION_ID(x) (((x) << 16UL) | (x))
++#define IS_VERSION_ID(x) (((x) & 0xFFFF) == (((x) >> 16UL) & 0xFFFF))
++#define GET_VERSION(x) (((x) >> 16UL) & 0xFFFF)
++#define IS_API_MATCH(x, y) (IS_VERSION_ID((x)) && IS_VERSION_ID((y)) && (GET_VERSION((x)) == GET_VERSION((y))))
++
++/**
++ * API version define.
++ * Indicates the version of the kernel API
++ * The version is a 16bit integer incremented on each API change.
++ * The 16bit integer is stored twice in a 32bit integer
++ * So for version 1 the value would be 0x00010001
++ */
++#define UMP_IOCTL_API_VERSION MAKE_VERSION_ID(2)
++
++typedef enum
++{
++	_UMP_IOC_QUERY_API_VERSION = 1,
++	_UMP_IOC_ALLOCATE,
++	_UMP_IOC_RELEASE,
++	_UMP_IOC_SIZE_GET,
++	_UMP_IOC_MAP_MEM,    /* not used in Linux */
++	_UMP_IOC_UNMAP_MEM,  /* not used in Linux */
++	_UMP_IOC_MSYNC,
++	_UMP_IOC_CACHE_OPERATIONS_CONTROL,
++	_UMP_IOC_SWITCH_HW_USAGE,
++	_UMP_IOC_LOCK,
++	_UMP_IOC_UNLOCK,
++}_ump_uk_functions;
++
++typedef enum
++{
++	UMP_REF_DRV_UK_CONSTRAINT_NONE = 0,
++	UMP_REF_DRV_UK_CONSTRAINT_PHYSICALLY_LINEAR = 1,
++	UMP_REF_DRV_UK_CONSTRAINT_USE_CACHE = 4,
++} ump_uk_alloc_constraints;
++
++typedef enum
++{
++	_UMP_UK_MSYNC_CLEAN = 0,
++	_UMP_UK_MSYNC_CLEAN_AND_INVALIDATE = 1,
++	_UMP_UK_MSYNC_INVALIDATE = 2,
++	_UMP_UK_MSYNC_FLUSH_L1   = 3,
++	_UMP_UK_MSYNC_READOUT_CACHE_ENABLED = 128,
++} ump_uk_msync_op;
++
++typedef enum
++{
++	_UMP_UK_CACHE_OP_START = 0,
++	_UMP_UK_CACHE_OP_FINISH  = 1,
++} ump_uk_cache_op_control;
++
++typedef enum
++{
++	_UMP_UK_READ = 1,
++	_UMP_UK_READ_WRITE = 3,
++} ump_uk_lock_usage;
++
++typedef enum
++{
++	_UMP_UK_USED_BY_CPU = 0,
++	_UMP_UK_USED_BY_MALI = 1,
++	_UMP_UK_USED_BY_UNKNOWN_DEVICE= 100,
++} ump_uk_user;
++
++/**
++ * Get API version ([in,out] u32 api_version, [out] u32 compatible)
++ */
++typedef struct _ump_uk_api_version_s
++{
++	void *ctx;      /**< [in,out] user-kernel context (trashed on output) */
++	u32 version;    /**< Set to the user space version on entry, stores the device driver version on exit */
++	u32 compatible; /**< Non-null if the device is compatible with the client */
++} _ump_uk_api_version_s;
++
++/**
++ * ALLOCATE ([out] u32 secure_id, [in,out] u32 size,  [in] contraints)
++ */
++typedef struct _ump_uk_allocate_s
++{
++	void *ctx;                              /**< [in,out] user-kernel context (trashed on output) */
++	u32 secure_id;                          /**< Return value from DD to Userdriver */
++	u32 size;                               /**< Input and output. Requested size; input. Returned size; output */
++	ump_uk_alloc_constraints constraints;   /**< Only input to Devicedriver */
++} _ump_uk_allocate_s;
++
++/**
++ * SIZE_GET ([in] u32 secure_id, [out]size )
++ */
++typedef struct _ump_uk_size_get_s
++{
++	void *ctx;                              /**< [in,out] user-kernel context (trashed on output) */
++	u32 secure_id;                          /**< Input to DD */
++	u32 size;                               /**< Returned size; output */
++} _ump_uk_size_get_s;
++
++/**
++ * Release ([in] u32 secure_id)
++ */
++typedef struct _ump_uk_release_s
++{
++	void *ctx;                              /**< [in,out] user-kernel context (trashed on output) */
++	u32 secure_id;                          /**< Input to DD */
++} _ump_uk_release_s;
++
++typedef struct _ump_uk_map_mem_s
++{
++	void *ctx;                      /**< [in,out] user-kernel context (trashed on output) */
++	void *mapping;                  /**< [out] Returns user-space virtual address for the mapping */
++	void *phys_addr;                /**< [in] physical address */
++	unsigned long size;             /**< [in] size */
++	u32 secure_id;                  /**< [in] secure_id to assign to mapping */
++	void * _ukk_private;            /**< Only used inside linux port between kernel frontend and common part to store vma */
++	u32 cookie;
++	u32 is_cached;            /**< [in,out] caching of CPU mappings */
++} _ump_uk_map_mem_s;
++
++typedef struct _ump_uk_unmap_mem_s
++{
++	void *ctx;            /**< [in,out] user-kernel context (trashed on output) */
++	void *mapping;
++	u32 size;
++	void * _ukk_private;
++	u32 cookie;
++} _ump_uk_unmap_mem_s;
++
++typedef struct _ump_uk_msync_s
++{
++	void *ctx;            /**< [in,out] user-kernel context (trashed on output) */
++	void *mapping;        /**< [in] mapping addr */
++	void *address;        /**< [in] flush start addr */
++	u32 size;             /**< [in] size to flush */
++	ump_uk_msync_op op;   /**< [in] flush operation */
++	u32 cookie;           /**< [in] cookie stored with reference to the kernel mapping internals */
++	u32 secure_id;        /**< [in] secure_id that identifies the ump buffer */
++	u32 is_cached;        /**< [out] caching of CPU mappings */
++} _ump_uk_msync_s;
++
++typedef struct _ump_uk_cache_operations_control_s
++{
++	void *ctx;                   /**< [in,out] user-kernel context (trashed on output) */
++	ump_uk_cache_op_control op;  /**< [in] cache operations start/stop */
++} _ump_uk_cache_operations_control_s;
++
++
++typedef struct _ump_uk_switch_hw_usage_s
++{
++	void *ctx;            /**< [in,out] user-kernel context (trashed on output) */
++	u32 secure_id;        /**< [in] secure_id that identifies the ump buffer */
++	ump_uk_user new_user;         /**< [in] cookie stored with reference to the kernel mapping internals */
++
++} _ump_uk_switch_hw_usage_s;
++
++typedef struct _ump_uk_lock_s
++{
++	void *ctx;            /**< [in,out] user-kernel context (trashed on output) */
++	u32 secure_id;        /**< [in] secure_id that identifies the ump buffer */
++	ump_uk_lock_usage lock_usage;
++} _ump_uk_lock_s;
++
++typedef struct _ump_uk_unlock_s
++{
++	void *ctx;            /**< [in,out] user-kernel context (trashed on output) */
++	u32 secure_id;        /**< [in] secure_id that identifies the ump buffer */
++} _ump_uk_unlock_s;
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* __UMP_UK_TYPES_H__ */
+diff --git a/modules/ARM_gralloc/Android.mk b/modules/ARM_gralloc/Android.mk
+new file mode 100644
+index 0000000..d0b2a12
+--- /dev/null
++++ b/modules/ARM_gralloc/Android.mk
+@@ -0,0 +1,25 @@
++################################################################################
++#                                                                              #
++# Copyright c 2009-2011  WonderMedia Technologies, Inc.   All Rights Reserved. #
++#                                                                              #
++# This PROPRIETARY SOFTWARE is the property of WonderMedia Technologies, Inc.  #
++# and may contain trade secrets and/or other confidential information of       #
++# WonderMedia Technologies, Inc. This file shall not be disclosed to any third #
++# party, in whole or in part, without prior written consent of WonderMedia.    #
++#                                                                              #
++# THIS PROPRIETARY SOFTWARE AND ANY RELATED DOCUMENTATION ARE PROVIDED AS IS,  #
++# WITH ALL FAULTS, AND WITHOUT WARRANTY OF ANY KIND EITHER EXPRESS OR IMPLIED, #
++# AND WonderMedia TECHNOLOGIES, INC. DISCLAIMS ALL EXPRESS OR IMPLIED          #
++# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, QUIET       #
++# ENJOYMENT OR NON-INFRINGEMENT.                                               #
++#                                                                              #
++################################################################################
++
++LOCAL_PATH := $(call my-dir)
++include $(CLEAR_VARS)
++
++LOCAL_MODULE_TAGS := eng
++
++#
++# gralloc.default.so
++#
+diff --git a/modules/ARM_gralloc/alloc_device.h b/modules/ARM_gralloc/alloc_device.h
+new file mode 100644
+index 0000000..3e243e2
+--- /dev/null
++++ b/modules/ARM_gralloc/alloc_device.h
+@@ -0,0 +1,22 @@
++/*
++ * Copyright (C) 2010 ARM Limited. All rights reserved.
++ *
++ * Copyright (C) 2008 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include <hardware/hardware.h>
++
++// Create an alloc device
++int alloc_device_open(hw_module_t const* module, const char* name, hw_device_t** device);
+diff --git a/modules/ARM_gralloc/framebuffer_device.h b/modules/ARM_gralloc/framebuffer_device.h
+new file mode 100644
+index 0000000..7e63d5f
+--- /dev/null
++++ b/modules/ARM_gralloc/framebuffer_device.h
+@@ -0,0 +1,25 @@
++/*
++ * Copyright (C) 2010 ARM Limited. All rights reserved.
++ *
++ * Copyright (C) 2008 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include <hardware/hardware.h>
++
++// Create a framebuffer device
++int framebuffer_device_open(hw_module_t const* module, const char* name, hw_device_t** device);
++
++// Initialize the framebuffer (must keep module lock before calling
++int init_frame_buffer_locked(struct private_module_t* module);
+diff --git a/modules/ARM_gralloc/gralloc.default.so b/modules/ARM_gralloc/gralloc.default.so
+new file mode 100755
+index 0000000000000000000000000000000000000000..e41671613f2a45154268255b83c428540a9c9edc
+GIT binary patch
+literal 13920
+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
+Xbt<JyAe{06mCb?B(UcHyO74FEqWmKI
+
+literal 0
+HcmV?d00001
+
+diff --git a/modules/ARM_gralloc/gralloc_helper.h b/modules/ARM_gralloc/gralloc_helper.h
+new file mode 100644
+index 0000000..277364b
+--- /dev/null
++++ b/modules/ARM_gralloc/gralloc_helper.h
+@@ -0,0 +1,29 @@
++/*
++ * Copyright (C) 2010 ARM Limited. All rights reserved.
++ *
++ * Copyright (C) 2008 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef GRALLOC_HELPER_H_
++#define GRALLOC_HELPER_H_
++
++#include <sys/mman.h>
++
++inline size_t round_up_to_page_size(size_t x)
++{
++    return (x + (PAGE_SIZE-1)) & ~(PAGE_SIZE-1);
++}
++
++#endif /* GRALLOC_HELPER_H_ */
+diff --git a/modules/ARM_gralloc/gralloc_priv.h b/modules/ARM_gralloc/gralloc_priv.h
+new file mode 100644
+index 0000000..caf0232
+--- /dev/null
++++ b/modules/ARM_gralloc/gralloc_priv.h
+@@ -0,0 +1,178 @@
++/*
++ * Copyright (C) 2010 ARM Limited. All rights reserved.
++ *
++ * Copyright (C) 2008 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef GRALLOC_PRIV_H_
++#define GRALLOC_PRIV_H_
++
++#include <stdint.h>
++#include <pthread.h>
++#include <errno.h>
++#include <linux/fb.h>
++#include <sys/types.h>
++#include <unistd.h>
++
++#include <hardware/gralloc.h>
++#include <cutils/native_handle.h>
++
++#include <ump/ump.h>
++
++#define GRALLOC_ARM_UMP_MODULE 1
++
++struct private_handle_t;
++
++struct private_module_t
++{
++	gralloc_module_t base;
++
++	private_handle_t* framebuffer;
++	uint32_t flags;
++	uint32_t numBuffers;
++	uint32_t bufferMask;
++	pthread_mutex_t lock;
++	buffer_handle_t currentBuffer;
++
++	struct fb_var_screeninfo info;
++	struct fb_fix_screeninfo finfo;
++	float xdpi;
++	float ydpi;
++	float fps;
++
++	enum
++	{
++		// flag to indicate we'll post this buffer
++		PRIV_USAGE_LOCKED_FOR_POST = 0x80000000
++	};
++
++	/* default constructor */
++	private_module_t();
++};
++
++#ifdef __cplusplus
++struct private_handle_t : public native_handle
++{
++#else
++struct private_handle_t
++{
++	struct native_handle nativeHandle;
++#endif
++
++	enum
++	{
++		PRIV_FLAGS_FRAMEBUFFER = 0x00000001,
++		PRIV_FLAGS_USES_UMP    = 0x00000002,
++		PRIV_FLAGS_USES_MB     = 0x00000004 | PRIV_FLAGS_USES_UMP //for wmt-mb
++	};
++
++	enum
++	{
++		LOCK_STATE_WRITE     =   1<<31,
++		LOCK_STATE_MAPPED    =   1<<30,
++		LOCK_STATE_READ_MASK =   0x3FFFFFFF
++	};
++
++	// ints
++	int     magic;
++	int     flags;
++	int     size;
++	int     base;
++	int     lockState;
++	int     writeOwner;
++	int     pid;
++
++    // Following members are for UMP memory only
++	int     ump_id;
++	int     ump_mem_handle;
++
++	// Following members is for framebuffer only
++	int     fd;
++	int     offset;
++
++
++#ifdef __cplusplus
++	static const int sNumInts = 11;
++	static const int sNumFds = 0;
++	static const int sMagic = 0x3141592;
++
++	private_handle_t(int flags, int size, int base, int lock_state, ump_secure_id secure_id, ump_handle handle):
++		magic(sMagic),
++		flags(flags),
++		size(size),
++		base(base),
++		lockState(lock_state),
++		writeOwner(0),
++		pid(getpid()),
++		ump_id((int)secure_id),
++		ump_mem_handle((int)handle),
++		fd(0),
++		offset(0)
++	{
++		version = sizeof(native_handle);
++		numFds = sNumFds;
++		numInts = sNumInts;
++	}
++
++	private_handle_t(int flags, int size, int base, int lock_state, int fb_file, int fb_offset):
++		magic(sMagic),
++		flags(flags),
++		size(size),
++		base(base),
++		lockState(lock_state),
++		writeOwner(0),
++		pid(getpid()),
++		ump_id((int)UMP_INVALID_SECURE_ID),
++		ump_mem_handle((int)UMP_INVALID_MEMORY_HANDLE),
++		fd(fb_file),
++		offset(fb_offset)
++	{
++		version = sizeof(native_handle);
++		numFds = sNumFds;
++		numInts = sNumInts;
++	}
++
++	~private_handle_t()
++	{
++		magic = 0;
++	}
++
++	bool usesPhysicallyContiguousMemory()
++	{
++		return (flags & PRIV_FLAGS_FRAMEBUFFER) ? true : false;
++	}
++
++	static int validate(const native_handle* h)
++	{
++		const private_handle_t* hnd = (const private_handle_t*)h;
++		if (!h || h->version != sizeof(native_handle) || h->numInts != sNumInts || h->numFds != sNumFds || hnd->magic != sMagic)
++		{
++			return -EINVAL;
++		}
++		return 0;
++	}
++
++	static private_handle_t* dynamicCast(const native_handle* in)
++	{
++		if (validate(in) == 0)
++		{
++			return (private_handle_t*) in;
++		}
++		return NULL;
++	}
++#endif
++};
++
++#endif /* GRALLOC_PRIV_H_ */
+diff --git a/modules/ARM_gralloc/gralloc_vsync_report.h b/modules/ARM_gralloc/gralloc_vsync_report.h
+new file mode 100644
+index 0000000..58c3035
+--- /dev/null
++++ b/modules/ARM_gralloc/gralloc_vsync_report.h
+@@ -0,0 +1,42 @@
++/*
++ * Copyright (C) 2011 ARM Limited. All rights reserved.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef GRALLOC_VSYNC_REPORT_H_
++#define GRALLOC_VSYNC_REPORT_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++
++typedef enum mali_vsync_event
++{
++	MALI_VSYNC_EVENT_BEGIN_WAIT = 0,
++	MALI_VSYNC_EVENT_END_WAIT
++} mali_vsync_event;
++
++extern void _mali_base_arch_vsync_event_report(mali_vsync_event);
++
++inline void gralloc_mali_vsync_report(mali_vsync_event event)
++{
++	_mali_base_arch_vsync_event_report(event);
++}
++
++#ifdef __cplusplus
++}
++#endif
++#endif /* GRALLOC_VSYNC_REPORT_H_ */
+diff --git a/modules/Android.mk b/modules/Android.mk
+index 6231e78..031635b 100644
+--- a/modules/Android.mk
++++ b/modules/Android.mk
+@@ -1,2 +1,2 @@
+-hardware_modules := gralloc hwcomposer audio nfc
++hardware_modules := ARM_gralloc gralloc hwcomposer audio nfc
+ include $(call all-named-subdir-makefiles,$(hardware_modules))
+diff --git a/modules/gralloc/Android.mk b/modules/gralloc/Android.mk
+index b24c4cd..e3acbae 100644
+--- a/modules/gralloc/Android.mk
++++ b/modules/gralloc/Android.mk
+@@ -1,33 +1,25 @@
+-# Copyright (C) 2008 The Android Open Source Project
+-#
+-# Licensed under the Apache License, Version 2.0 (the "License");
+-# you may not use this file except in compliance with the License.
+-# You may obtain a copy of the License at
+-#
+-#      http://www.apache.org/licenses/LICENSE-2.0
+-#
+-# Unless required by applicable law or agreed to in writing, software
+-# distributed under the License is distributed on an "AS IS" BASIS,
+-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-# See the License for the specific language governing permissions and
+-# limitations under the License.
+-
++################################################################################
++#                                                                              #
++# Copyright c 2009-2011  WonderMedia Technologies, Inc.   All Rights Reserved. #
++#                                                                              #
++# This PROPRIETARY SOFTWARE is the property of WonderMedia Technologies, Inc.  #
++# and may contain trade secrets and/or other confidential information of       #
++# WonderMedia Technologies, Inc. This file shall not be disclosed to any third #
++# party, in whole or in part, without prior written consent of WonderMedia.    #
++#                                                                              #
++# THIS PROPRIETARY SOFTWARE AND ANY RELATED DOCUMENTATION ARE PROVIDED AS IS,  #
++# WITH ALL FAULTS, AND WITHOUT WARRANTY OF ANY KIND EITHER EXPRESS OR IMPLIED, #
++# AND WonderMedia TECHNOLOGIES, INC. DISCLAIMS ALL EXPRESS OR IMPLIED          #
++# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, QUIET       #
++# ENJOYMENT OR NON-INFRINGEMENT.                                               #
++#                                                                              #
++################################################################################
+ 
+ LOCAL_PATH := $(call my-dir)
+-
+-# HAL module implemenation stored in
+-# hw/<OVERLAY_HARDWARE_MODULE_ID>.<ro.product.board>.so
+ include $(CLEAR_VARS)
+ 
+-LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
+-LOCAL_SHARED_LIBRARIES := liblog libcutils
+-
+-LOCAL_SRC_FILES := 	\
+-	gralloc.cpp 	\
+-	framebuffer.cpp \
+-	mapper.cpp
+-	
+-LOCAL_MODULE := gralloc.default
+-LOCAL_CFLAGS:= -DLOG_TAG=\"gralloc\"
++LOCAL_MODULE_TAGS := eng
+ 
+-include $(BUILD_SHARED_LIBRARY)
++#
++# gralloc.android.so
++#
+diff --git a/modules/gralloc/gralloc.android.so b/modules/gralloc/gralloc.android.so
+new file mode 100755
+index 0000000000000000000000000000000000000000..815137c27a989868607c449fd2fc587361b3a792
+GIT binary patch
+literal 10180
+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
+E3kXAg761SM
+
+literal 0
+HcmV?d00001
+
+-- 
+1.7.9.5
+
