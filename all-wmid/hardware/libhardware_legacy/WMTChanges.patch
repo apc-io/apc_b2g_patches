@@ -1,0 +1,658 @@
+diff --git a/audio/AudioPolicyManagerBase.cpp b/audio/AudioPolicyManagerBase.cpp
+index ac31ad4..96c4651 100644
+--- a/audio/AudioPolicyManagerBase.cpp
++++ b/audio/AudioPolicyManagerBase.cpp
+@@ -1996,12 +1996,12 @@ const AudioPolicyManagerBase::VolumeCurvePoint
+ 
+ const AudioPolicyManagerBase::VolumeCurvePoint
+     AudioPolicyManagerBase::sSpeakerMediaVolumeCurve[AudioPolicyManagerBase::VOLCNT] = {
+-    {1, -56.0f}, {20, -34.0f}, {60, -11.0f}, {100, 0.0f}
++    {1, -53.0f}, {20, -30.0f}, {60, -10.0f}, {100, 0.0f}
+ };
+ 
+ const AudioPolicyManagerBase::VolumeCurvePoint
+     AudioPolicyManagerBase::sSpeakerSonificationVolumeCurve[AudioPolicyManagerBase::VOLCNT] = {
+-    {1, -29.7f}, {33, -20.1f}, {66, -10.2f}, {100, 0.0f}
++    {1, -29.7f}, {33, -17.1f}, {66, -7.2f}, {100, 0.0f}
+ };
+ 
+ 
+diff --git a/wifi/Android.mk b/wifi/Android.mk
+index b4a6a7c..8d1d59b 100644
+--- a/wifi/Android.mk
++++ b/wifi/Android.mk
+@@ -28,6 +28,13 @@ ifdef WIFI_DRIVER_FW_PATH_PARAM
+ LOCAL_CFLAGS += -DWIFI_DRIVER_FW_PATH_PARAM=\"$(WIFI_DRIVER_FW_PATH_PARAM)\"
+ endif
+ 
++LOCAL_C_INCLUDES += \
++	device/wmt/wmid/env/lib \
++	device/wmt/wmid/gpio
++
+ LOCAL_SRC_FILES += wifi/wifi.c
+ 
+-LOCAL_SHARED_LIBRARIES += libnetutils
++LOCAL_SHARED_LIBRARIES += \
++	libnetutils \
++	libwmtenv \
++	libwmtgpio
+diff --git a/wifi/wifi.c b/wifi/wifi.c
+index 37cbb1e..c6c085e 100644
+--- a/wifi/wifi.c
++++ b/wifi/wifi.c
+@@ -35,6 +35,11 @@
+ #define _REALLY_INCLUDE_SYS__SYSTEM_PROPERTIES_H_
+ #include <sys/_system_properties.h>
+ #endif
++#include <wmt-gpio-dev.h>
++
++struct gpio_cfg_t *g_ping_cfg = NULL;
++struct wmt_reg_op_t *g_ping_data = NULL;
++int g_ping_active = -1;
+ 
+ static struct wpa_ctrl *ctrl_conn;
+ static struct wpa_ctrl *monitor_conn;
+@@ -48,18 +53,88 @@ extern char *dhcp_lasterror();
+ extern void get_dhcp_info();
+ extern int init_module(void *, unsigned long, const char *);
+ extern int delete_module(const char *, unsigned int);
++extern int wmt_getsyspara(char *varname, unsigned char *varval, int * varlen);
++extern int wmt_gpioconfig(struct gpio_cfg_t *gpioconf);
++extern int wmt_gpioset(struct wmt_reg_op_t *gpioset);
++extern int wmt_mmc2_set_state(int state);
+ 
+ static char iface[PROPERTY_VALUE_MAX];
+ // TODO: use new ANDROID_SOCKET mechanism, once support for multiple
+ // sockets is in
+ 
++#define WIFI_DRIVER_MODULE_PATH
++
++#define  WIFI_DRIVER_MODULE_PATH_CFG80211        "/lib/modules/3.0.8/kernel/net/wireless/cfg80211.ko"
++#define  WIFI_DRIVER_MODULE_PATH_MAC80211        "/lib/modules/3.0.8/kernel/net/mac80211/mac80211.ko"
++
++// Ralink wifi module paths
++#define  WIFI_DRIVER_MODULE_PATH_RT2800_1        "/lib/modules/3.0.8/kernel/drivers/net/wireless/rt2x00/rt2x00lib.ko"
++#define  WIFI_DRIVER_MODULE_PATH_RT2800_2        "/lib/modules/3.0.8/kernel/drivers/net/wireless/rt2x00/rt2x00usb.ko"
++#define  WIFI_DRIVER_MODULE_PATH_RT2800_3        "/lib/modules/3.0.8/kernel/drivers/net/wireless/rt2x00/rt2800lib.ko"
++#define  WIFI_DRIVER_MODULE_PATH_RT2800_4        "/lib/modules/3.0.8/kernel/drivers/net/wireless/rt2x00/rt2800usb.ko"
++
++// Atheros wifi module paths
++#define  WIFI_DRIVER_MODULE_PATH_ATHEROS_1     "/lib/modules/compat.ko"
++#define  WIFI_DRIVER_MODULE_PATH_ATHEROS_2     "/lib/modules/compat_firmware_class.ko"
++#define  WIFI_DRIVER_MODULE_PATH_ATHEROS_3     "/lib/modules/cfg80211.ko"
++#define  WIFI_DRIVER_MODULE_PATH_ATHEROS_4     "/lib/modules/mac80211.ko"
++#define  WIFI_DRIVER_MODULE_PATH_ATHEROS_5     "/lib/modules/ath.ko"
++#define  WIFI_DRIVER_MODULE_PATH_ATHEROS_6     "/lib/modules/ath9k_hw.ko"
++#define  WIFI_DRIVER_MODULE_PATH_ATHEROS_7     "/lib/modules/ath9k_common.ko"
++#define  WIFI_DRIVER_MODULE_PATH_ATHEROS_8     "/lib/modules/ath9k_htc.ko"
++
++// Marvell sdio wifi module paths
++#define  WIFI_DRIVER_MODULE_PATH_MARVELL_1     "/lib/modules/mlan.ko"
++#define  WIFI_DRIVER_MODULE_PATH_MARVELL_2     "/lib/modules/sd8xxx.ko"
++
++// Realtek wifi module paths
++#define  WIFI_DRIVER_MODULE_PATH_REALTEK       "/lib/modules/rtl8188.ko"
++
++// Ralink 5572 wifi module paths
++#define  WIFI_DRIVER_MODULE_PATH_RT5572        "/lib/modules/rt5572sta.ko"
++
++// BroadCom sdio wifi module paths
++#define WIFI_DRIVER_MODULE_PATH_BROADCOM       "/lib/modules/3.0.8/kernel/drivers/net/wireless/bcmdhd/bcmdhd.ko"
++
++#define  WIFI_DRIVER_MODULE_NAME_CFG80211        "cfg80211"
++#define  WIFI_DRIVER_MODULE_NAME_MAC80211        "mac80211"
++
++// Ralink wifi module names
++#define  WIFI_DRIVER_MODULE_NAME_RT2800_1        "rt2x00lib"
++#define  WIFI_DRIVER_MODULE_NAME_RT2800_2        "rt2x00usb"
++#define  WIFI_DRIVER_MODULE_NAME_RT2800_3        "rt2800lib"
++#define  WIFI_DRIVER_MODULE_NAME_RT2800_4        "rt2800usb"
++
++// Atheros wifi module names
++#define  WIFI_DRIVER_MODULE_NAME_ATHEROS_1     "compat"
++#define  WIFI_DRIVER_MODULE_NAME_ATHEROS_2     "compat_firmware_class"
++#define  WIFI_DRIVER_MODULE_NAME_ATHEROS_3     "cfg80211"
++#define  WIFI_DRIVER_MODULE_NAME_ATHEROS_4     "mac80211"
++#define  WIFI_DRIVER_MODULE_NAME_ATHEROS_5     "ath"
++#define  WIFI_DRIVER_MODULE_NAME_ATHEROS_6     "ath9k_hw"
++#define  WIFI_DRIVER_MODULE_NAME_ATHEROS_7     "ath9k_common"
++#define  WIFI_DRIVER_MODULE_NAME_ATHEROS_8     "ath9k_htc"
++
++// Marvell sdio wifi module names
++#define  WIFI_DRIVER_MODULE_NAME_MARVELL_1     "mlan"
++#define  WIFI_DRIVER_MODULE_NAME_MARVELL_2     "sd8xxx"
++
++// Realtek wifi module names
++#define  WIFI_DRIVER_MODULE_NAME_REALTEK       "rtl8188"
++
++// Ralink 5572 wifi module names
++#define  WIFI_DRIVER_MODULE_NAME_RT5572        "rt5572sta"
++
++// BroadCom sdio wifi module names
++#define  WIFI_DRIVER_MODULE_NAME_BROADCOM      "bcmdhd"
++
+ #ifndef WIFI_DRIVER_MODULE_ARG
+ #define WIFI_DRIVER_MODULE_ARG          ""
+ #endif
+ #ifndef WIFI_FIRMWARE_LOADER
+ #define WIFI_FIRMWARE_LOADER		""
+ #endif
+-#define WIFI_TEST_INTERFACE		"sta"
++#define WIFI_TEST_INTERFACE		"wlan0"
+ 
+ #ifndef WIFI_DRIVER_FW_PATH_STA
+ #define WIFI_DRIVER_FW_PATH_STA		NULL
+@@ -79,9 +154,13 @@ static char iface[PROPERTY_VALUE_MAX];
+ 
+ static const char IFACE_DIR[]           = "/data/system/wpa_supplicant";
+ #ifdef WIFI_DRIVER_MODULE_PATH
+-static const char DRIVER_MODULE_NAME[]  = WIFI_DRIVER_MODULE_NAME;
+-static const char DRIVER_MODULE_TAG[]   = WIFI_DRIVER_MODULE_NAME " ";
+-static const char DRIVER_MODULE_PATH[]  = WIFI_DRIVER_MODULE_PATH;
++//static const char DRIVER_MODULE_NAME[]  = WIFI_DRIVER_MODULE_NAME;
++static char DRIVER_MODULE_TAG_RALINK[32];
++static const char DRIVER_MODULE_TAG_ATHEROS[]   = WIFI_DRIVER_MODULE_NAME_ATHEROS_8;
++static const char DRIVER_MODULE_TAG_MARVELL[]   = WIFI_DRIVER_MODULE_NAME_MARVELL_2;
++static const char DRIVER_MODULE_TAG_REALTEK[]   = WIFI_DRIVER_MODULE_NAME_REALTEK;
++static char DRIVER_MODULE_TAG_BROADCOM[32];
++
+ static const char DRIVER_MODULE_ARG[]   = WIFI_DRIVER_MODULE_ARG;
+ #endif
+ static const char FIRMWARE_LOADER[]     = WIFI_FIRMWARE_LOADER;
+@@ -99,6 +178,166 @@ static unsigned char dummy_key[21] = { 0x02, 0x11, 0xbe, 0x33, 0x43, 0x35,
+                                        0x68, 0x47, 0x84, 0x99, 0xa9, 0x2b,
+                                        0x1c, 0xd3, 0xee, 0xff, 0xf1, 0xe2,
+                                        0xf3, 0xf4, 0xf5 };
++static int wifi_module;
++
++static int wifi_configPower(int on)
++{
++	int ret = -1;
++	char buf[50];
++	int len = sizeof(buf);
++	int legacy_mode = 0;
++
++	if (on)
++		LOGI("wifi power on");
++	else
++		LOGI("wifi power off");
++
++	if (!wifi_module) {
++		memset((void*)buf, 0, len);
++		ret = wmt_getsyspara("wmt.wifi.param", (unsigned char *)buf, &len);
++	
++		if (ret) {
++			LOGI("wmt.wifi.param isn't set");
++		} else {
++			sscanf(buf,"%d:%d", &legacy_mode,&wifi_module);
++            LOGI("Wifi Module: %d", wifi_module);
++		}
++	}
++
++	if ((wifi_module == 8787) || (wifi_module == 4330)) {
++		ret = wmt_mmc_set_state(on);
++		LOGE("ret = %d",ret);
++		return ret;
++	} else {
++
++		if ((g_ping_cfg == NULL) || (g_ping_data == NULL) || (g_ping_active < 0)) {
++			len = sizeof(buf);
++			memset((void*)buf, 0, len);	
++
++			ret = wmt_getsyspara("wmt.gpo.wifi", (unsigned char *)buf, &len);
++			if (ret) {
++				LOGE("Can not get wmt.gpo.wifi , wifi power control failed %s",strerror(errno));
++				return -1;
++		    } else {
++				g_ping_cfg = (struct gpio_cfg_t *)calloc(1, sizeof(struct gpio_cfg_t));
++				g_ping_data = (struct wmt_reg_op_t *)calloc(1, sizeof(struct wmt_reg_op_t));
++		  		sscanf(buf,"%d:%d:%d:%x:%x:%x",&ret,&g_ping_active,&g_ping_data->bitmap,&g_ping_cfg->ctl.addr,&g_ping_cfg->oc.addr,&g_ping_data->addr);
++				g_ping_cfg->ctl.bitmap = 1<<g_ping_data->bitmap;
++				g_ping_cfg->ctl.regval = g_ping_cfg->ctl.bitmap;
++				g_ping_cfg->oc.bitmap = 1<<g_ping_data->bitmap;
++				g_ping_cfg->oc.regval = g_ping_cfg->oc.bitmap;
++				g_ping_data->bitmap = 1<<g_ping_data->bitmap;
++
++				if (g_ping_active)
++					g_ping_active = g_ping_data->bitmap;
++
++				if (wmt_gpioconfig(g_ping_cfg)) {
++					LOGE("config gpio error");
++					return -1;
++				}
++			}
++		}
++
++		if (on)
++			g_ping_data->regval = g_ping_active;
++		else
++			g_ping_data->regval = ~g_ping_active;
++
++		//LOGI("ctl , addr = 0x%x , bitmap = 0x%x , val = 0x%x",g_ping_cfg->ctl.addr,g_ping_cfg->ctl.bitmap,g_ping_cfg->ctl.regval);
++		//LOGI("oc , addr = 0x%x , bitmap = 0x%x , val = 0x%x",g_ping_cfg->oc.addr,g_ping_cfg->oc.bitmap,g_ping_cfg->oc.regval);
++		//LOGI("od , addr = 0x%x , bitmap = 0x%x , val = 0x%x",g_ping_data->addr,g_ping_data->bitmap,g_ping_data->regval);
++		//LOGI("g_ping_active = 0x%x",g_ping_active);
++
++		if (wmt_gpioset(g_ping_data)) {
++			LOGE("set gpio error");
++			return -1;
++		}
++
++		if (on)
++			usleep(500000);
++
++		return 0;
++	}	
++}
++
++static int check_wifi_list()
++{
++	int i, j, nxt;
++    int vendor_fd, product_fd, list_fd;
++	char buf[50];
++	char vendor_buf[5], product_buf[5], list_buf[1024];
++
++    if (wifi_module)
++        return 0;
++
++	LOGI("check wifi list ...");
++    list_fd = open("/system/etc/wmt/wifi_list", O_RDONLY);
++    if (list_fd < 0) {
++        close(list_fd);
++        LOGI("Cannot open /system/etc/wmt/wifi_list: %s", strerror(errno));
++        wifi_module = 8188;
++        return -1;
++    }
++    if (read(list_fd, list_buf, sizeof(list_buf)) < 0) {
++        LOGE("Error reading /system/etc/wmt/wifi_list: %s", strerror(errno));
++        close(list_fd);
++        return -1;
++    }
++    close(list_fd);
++
++    for (i = 1; i < 5; i++) {
++        sprintf(buf, "/sys/bus/usb/devices/usb1/1-%d/idVendor", i);
++        vendor_fd = open(buf, O_RDONLY);
++        if (vendor_fd < 0) {
++            continue;
++        }
++        if (read(vendor_fd, vendor_buf, 4) < 0) {
++            LOGE("Error reading \"%s\": %s", buf, strerror(errno));
++            close(vendor_fd);
++            continue;
++        }
++        close(vendor_fd);
++        vendor_buf[4] = 0;
++
++        sprintf(buf, "/sys/bus/usb/devices/usb1/1-%d/idProduct", i);
++        product_fd = open(buf, O_RDONLY);
++        if (product_fd < 0) {
++            LOGE("Cannot open \"%s\": %s", buf, strerror(errno));
++            continue;
++        }
++        if (read(product_fd, product_buf, 4) < 0) {
++            LOGE("Error reading \"%s\": %s", buf, strerror(errno));
++            close(product_fd);
++            continue;
++        }
++        close(product_fd);
++        product_buf[4] = 0;
++
++        LOGI("idVendor: %s, idProduct: %s", vendor_buf, product_buf);
++
++        for (j = 0; list_buf[j] != '\0'; j = nxt+1) {
++			for (nxt = j; list_buf[nxt] != '\n'; ++nxt)
++				;
++            if (strncmp(vendor_buf, list_buf+j, 4) == 0 && strncmp(product_buf, list_buf+j+5, 4) == 0) {
++                strncpy(buf, list_buf+j+10, 4);
++                buf[4] = 0;
++                sscanf(buf, "%d", &wifi_module);
++                break;
++            }
++        }
++        if (wifi_module)
++            break;
++    }
++
++    if (wifi_module)
++        LOGI("Wifi Module: %d", wifi_module);
++    else {
++        LOGE("Check wifi list fail! set Wifi module to rtl8188");
++        wifi_module = 8188;
++    }
++
++	return 0;
++}
+ 
+ static int insmod(const char *filename, const char *args)
+ {
+@@ -158,11 +397,12 @@ const char *get_dhcp_error_string() {
+     return dhcp_lasterror();
+ }
+ 
+-int is_wifi_driver_loaded() {
++int is_wifi_driver_loaded(int loading) {
+     char driver_status[PROPERTY_VALUE_MAX];
+ #ifdef WIFI_DRIVER_MODULE_PATH
+     FILE *proc;
+-    char line[sizeof(DRIVER_MODULE_TAG)+10];
++    //char line[sizeof(DRIVER_MODULE_TAG)+10];
++    char line[30];
+ #endif
+ 
+     if (!property_get(DRIVER_PROP_NAME, driver_status, NULL)
+@@ -182,10 +422,70 @@ int is_wifi_driver_loaded() {
+         return 0;
+     }
+     while ((fgets(line, sizeof(line), proc)) != NULL) {
+-        if (strncmp(line, DRIVER_MODULE_TAG, strlen(DRIVER_MODULE_TAG)) == 0) {
+-            fclose(proc);
+-            return 1;
+-        }
++		switch(wifi_module) {
++			case 2800: {
++				if (loading) {
++					strncpy(DRIVER_MODULE_TAG_RALINK, WIFI_DRIVER_MODULE_NAME_RT2800_4, strlen(WIFI_DRIVER_MODULE_NAME_RT2800_4));
++					DRIVER_MODULE_TAG_RALINK[strlen(WIFI_DRIVER_MODULE_NAME_RT2800_4)] = '\0';
++				} else {
++					strncpy(DRIVER_MODULE_TAG_RALINK, WIFI_DRIVER_MODULE_NAME_CFG80211, strlen(WIFI_DRIVER_MODULE_NAME_CFG80211));
++					DRIVER_MODULE_TAG_RALINK[strlen(WIFI_DRIVER_MODULE_NAME_CFG80211)] = '\0';
++				}
++				if (strncmp(line, DRIVER_MODULE_TAG_RALINK, strlen(DRIVER_MODULE_TAG_RALINK)) == 0) {
++					fclose(proc);
++					LOGE("ralink wifi drivers have already been loaded");
++					return 1;
++				}
++			} break;
++			case 8787: {
++				if (strncmp(line, DRIVER_MODULE_TAG_MARVELL, strlen(DRIVER_MODULE_TAG_MARVELL)) == 0) {
++					fclose(proc);
++					return 1;
++				}
++			} break;
++			case 9000: {
++				if (strncmp(line, DRIVER_MODULE_TAG_ATHEROS, strlen(DRIVER_MODULE_TAG_ATHEROS)) == 0) {
++					fclose(proc);
++					return 1;
++				}
++			} break;
++			case 8188: {
++				if (strncmp(line, DRIVER_MODULE_TAG_REALTEK, strlen(DRIVER_MODULE_TAG_REALTEK)) == 0) {
++					fclose(proc);
++					return 1;
++				}
++			} break;
++			case 5572: {
++				if (loading) {
++					strncpy(DRIVER_MODULE_TAG_RALINK, WIFI_DRIVER_MODULE_NAME_RT5572, strlen(WIFI_DRIVER_MODULE_NAME_RT5572));
++					DRIVER_MODULE_TAG_RALINK[strlen(WIFI_DRIVER_MODULE_NAME_RT5572)] = '\0';
++				} else {
++					strncpy(DRIVER_MODULE_TAG_RALINK, WIFI_DRIVER_MODULE_NAME_CFG80211, strlen(WIFI_DRIVER_MODULE_NAME_CFG80211));
++					DRIVER_MODULE_TAG_RALINK[strlen(WIFI_DRIVER_MODULE_NAME_CFG80211)] = '\0';
++				}
++				if (strncmp(line, DRIVER_MODULE_TAG_RALINK, strlen(DRIVER_MODULE_TAG_RALINK)) == 0) {
++					fclose(proc);
++					LOGE("ralink wifi drivers have already been loaded");
++					return 1;
++				}
++			} break;
++			case 4330: {
++				if (loading) {
++					strncpy(DRIVER_MODULE_TAG_BROADCOM, WIFI_DRIVER_MODULE_NAME_BROADCOM, strlen(WIFI_DRIVER_MODULE_NAME_BROADCOM));
++					DRIVER_MODULE_TAG_BROADCOM[strlen(WIFI_DRIVER_MODULE_NAME_BROADCOM)] = '\0';
++				} else {
++					strncpy(DRIVER_MODULE_TAG_BROADCOM, WIFI_DRIVER_MODULE_NAME_CFG80211, strlen(WIFI_DRIVER_MODULE_NAME_CFG80211));
++					DRIVER_MODULE_TAG_BROADCOM[strlen(WIFI_DRIVER_MODULE_NAME_CFG80211)] = '\0';
++				}
++				if (strncmp(line, DRIVER_MODULE_TAG_BROADCOM, strlen(DRIVER_MODULE_TAG_BROADCOM)) == 0) {
++					fclose(proc);
++					return 1;
++				}
++			} break;
++			default:
++				return 0;
++			break;
++		}
+     }
+     fclose(proc);
+     property_set(DRIVER_PROP_NAME, "unloaded");
+@@ -201,13 +501,100 @@ int wifi_load_driver()
+     char driver_status[PROPERTY_VALUE_MAX];
+     int count = 100; /* wait at most 20 seconds for completion */
+ 
+-    if (is_wifi_driver_loaded()) {
+-        return 0;
+-    }
++    if (wifi_configPower(1) < 0)
++        return -1;
+ 
+-    if (insmod(DRIVER_MODULE_PATH, DRIVER_MODULE_ARG) < 0)
++    if (check_wifi_list() < 0)
+         return -1;
+ 
++    if (is_wifi_driver_loaded(1)) {
++        return 0;
++    } /*else {
++        wifi_unload_driver();
++    }*/
++
++	switch(wifi_module) {
++		case 2800: {
++			if (insmod(WIFI_DRIVER_MODULE_PATH_CFG80211, DRIVER_MODULE_ARG) < 0) {
++                LOGE("load wifi module %s fail", WIFI_DRIVER_MODULE_PATH_CFG80211);
++				return -1;
++			}
++			if (insmod(WIFI_DRIVER_MODULE_PATH_MAC80211, DRIVER_MODULE_ARG) < 0) {
++                LOGE("load wifi module %s fail", WIFI_DRIVER_MODULE_PATH_MAC80211);
++				return -1;
++			}
++			if (insmod(WIFI_DRIVER_MODULE_PATH_RT2800_1, DRIVER_MODULE_ARG) < 0) {
++                LOGE("load wifi module %s fail", WIFI_DRIVER_MODULE_PATH_RT2800_1);
++				return -1;
++			}
++			if (insmod(WIFI_DRIVER_MODULE_PATH_RT2800_2, DRIVER_MODULE_ARG) < 0) {
++                LOGE("load wifi module %s fail", WIFI_DRIVER_MODULE_PATH_RT2800_2);
++				return -1;
++			}
++			if (insmod(WIFI_DRIVER_MODULE_PATH_RT2800_3, DRIVER_MODULE_ARG) < 0) {
++                LOGE("load wifi module %s fail", WIFI_DRIVER_MODULE_PATH_RT2800_3);
++				return -1;
++			}
++			if (insmod(WIFI_DRIVER_MODULE_PATH_RT2800_4, DRIVER_MODULE_ARG) < 0) {
++                LOGE("load wifi module %s fail", WIFI_DRIVER_MODULE_PATH_RT2800_4);
++				return -1;
++			}
++		} break;
++		case 8787: {
++			if (insmod(WIFI_DRIVER_MODULE_PATH_MARVELL_1, DRIVER_MODULE_ARG) < 0)
++				return -1;
++			if (insmod(WIFI_DRIVER_MODULE_PATH_MARVELL_2, DRIVER_MODULE_ARG) < 0)
++				return -1;
++		} break;
++		case 9000: {
++			if (insmod(WIFI_DRIVER_MODULE_PATH_ATHEROS_1, DRIVER_MODULE_ARG) < 0)
++				return -1;
++			if (insmod(WIFI_DRIVER_MODULE_PATH_ATHEROS_2, DRIVER_MODULE_ARG) < 0)
++				return -1;
++			if (insmod(WIFI_DRIVER_MODULE_PATH_ATHEROS_3, DRIVER_MODULE_ARG) < 0)
++				return -1;
++			if (insmod(WIFI_DRIVER_MODULE_PATH_ATHEROS_4, DRIVER_MODULE_ARG) < 0)
++				return -1;
++			if (insmod(WIFI_DRIVER_MODULE_PATH_ATHEROS_5, DRIVER_MODULE_ARG) < 0)
++				return -1;
++			if (insmod(WIFI_DRIVER_MODULE_PATH_ATHEROS_6, DRIVER_MODULE_ARG) < 0)
++				return -1;
++			if (insmod(WIFI_DRIVER_MODULE_PATH_ATHEROS_7, DRIVER_MODULE_ARG) < 0)
++				return -1;
++			if (insmod(WIFI_DRIVER_MODULE_PATH_ATHEROS_8, DRIVER_MODULE_ARG) < 0)
++				return -1;
++		} break;
++		case 8188: {
++			if (insmod(WIFI_DRIVER_MODULE_PATH_REALTEK, DRIVER_MODULE_ARG) < 0)
++				return -1;
++		} break;
++		case 5572: {
++			if (insmod(WIFI_DRIVER_MODULE_PATH_CFG80211, DRIVER_MODULE_ARG) < 0) {
++                LOGE("load wifi module %s fail", WIFI_DRIVER_MODULE_PATH_CFG80211);
++				return -1;
++			}
++			if (insmod(WIFI_DRIVER_MODULE_PATH_MAC80211, DRIVER_MODULE_ARG) < 0) {
++                LOGE("load wifi module %s fail", WIFI_DRIVER_MODULE_PATH_MAC80211);
++				return -1;
++			}
++			if (insmod(WIFI_DRIVER_MODULE_PATH_RT5572, DRIVER_MODULE_ARG) < 0) {
++			    LOGE("load wifi module %s fail", WIFI_DRIVER_MODULE_PATH_RT5572);
++				return -1;
++			}
++		} break;
++		case 4330: {
++			if (insmod(WIFI_DRIVER_MODULE_PATH_CFG80211, DRIVER_MODULE_ARG) < 0) {
++                LOGE("load wifi module %s fail", WIFI_DRIVER_MODULE_PATH_CFG80211);
++				return -1;
++			}
++			if (insmod(WIFI_DRIVER_MODULE_PATH_BROADCOM, DRIVER_MODULE_ARG) < 0)
++				return -1;
++		} break;
++		default:
++			break;
++	}
++	//usleep(200000);
++
+     if (strcmp(FIRMWARE_LOADER,"") == 0) {
+         /* usleep(WIFI_DRIVER_LOADER_DELAY); */
+         property_set(DRIVER_PROP_NAME, "ok");
+@@ -222,10 +609,12 @@ int wifi_load_driver()
+                 return 0;
+             else if (strcmp(DRIVER_PROP_NAME, "failed") == 0) {
+                 wifi_unload_driver();
++                LOGE("wifi_load_driver: fail");
+                 return -1;
+             }
+         }
+         usleep(200000);
++        LOGW("wifi_load_driver: status not ready");
+     }
+     property_set(DRIVER_PROP_NAME, "timeout");
+     wifi_unload_driver();
+@@ -240,17 +629,84 @@ int wifi_unload_driver()
+ {
+     usleep(200000); /* allow to finish interface down */
+ #ifdef WIFI_DRIVER_MODULE_PATH
+-    if (rmmod(DRIVER_MODULE_NAME) == 0) {
++    int status = 0;
++
++	switch(wifi_module) {
++		case 2800: {
++			//Patch{ Ralink driver can't be removed if wlan0 interface isn't down
++			property_set("ctl.start", "ifdown_wifi");
++			sched_yield();
++			//}Patch
++			usleep(200000);
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_RT2800_4);
++			usleep(10000);
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_RT2800_3);
++			usleep(10000);
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_RT2800_2);
++			usleep(10000);
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_RT2800_1);
++			usleep(10000);
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_MAC80211);
++			usleep(10000);
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_CFG80211);
++		} break;
++		case 8787: {
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_MARVELL_2);
++			rmmod(WIFI_DRIVER_MODULE_NAME_MARVELL_1);
++		} break;
++		case 9000: {
++		    status = rmmod(WIFI_DRIVER_MODULE_NAME_ATHEROS_8);
++		    rmmod(WIFI_DRIVER_MODULE_NAME_ATHEROS_7);
++		    rmmod(WIFI_DRIVER_MODULE_NAME_ATHEROS_6);
++		    rmmod(WIFI_DRIVER_MODULE_NAME_ATHEROS_5);
++		    rmmod(WIFI_DRIVER_MODULE_NAME_ATHEROS_4);
++		    rmmod(WIFI_DRIVER_MODULE_NAME_ATHEROS_3);
++		    usleep(200000);
++		    rmmod(WIFI_DRIVER_MODULE_NAME_ATHEROS_2);
++		    usleep(200000);
++		    rmmod(WIFI_DRIVER_MODULE_NAME_ATHEROS_1);
++		} break;
++		case 8188: {
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_REALTEK);
++		} break;
++		case 5572: {
++			//Patch{ Ralink driver can't be removed if wlan0 interface isn't down
++			property_set("ctl.start", "ifdown_wifi");
++			sched_yield();
++			usleep(200000);
++			//}Patch
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_RT5572);
++			usleep(10000);
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_MAC80211);
++			usleep(10000);
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_CFG80211);
++		} break;
++		case 4330: {
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_BROADCOM);
++			usleep(10000);
++			rmmod(WIFI_DRIVER_MODULE_NAME_CFG80211);
++		} break;
++		default:
++			break;
++	}
++    //usleep(200000);
++
++    LOGW("unload wifi driver %d ",status);
++    if (status == 0) {
+         int count = 20; /* wait at most 10 seconds for completion */
+         while (count-- > 0) {
+-            if (!is_wifi_driver_loaded())
++            if (!is_wifi_driver_loaded(0))
+                 break;
+             usleep(500000);
++            LOGW("wifi_unload_driver: still loaded");
+         }
+         usleep(500000); /* allow card removal */
+         if (count) {
++			if (wifi_configPower(0) < 0)
++			    return -1;
+             return 0;
+         }
++        LOGE("unload wifi driver fail");
+         return -1;
+     } else
+         return -1;
+@@ -517,6 +973,7 @@ int wifi_start_supplicant_common(const char *config_file)
+     property_get("wifi.interface", iface, WIFI_TEST_INTERFACE);
+     snprintf(daemon_cmd, PROPERTY_VALUE_MAX, "%s:-i%s -c%s", SUPPLICANT_NAME, iface, config_file);
+     property_set("ctl.start", daemon_cmd);
++    usleep(500000);
+     sched_yield();
+ 
+     while (count-- > 0) {
+@@ -583,6 +1040,8 @@ int wifi_connect_to_supplicant()
+     char ifname[256];
+     char supp_status[PROPERTY_VALUE_MAX] = {'\0'};
+ 
++    LOGE(" ** enable WiFi interface ** ");
++    property_set("ctl.start", "ifup_wifi");
+     /* Make sure supplicant is running */
+     if (!property_get(SUPP_PROP_NAME, supp_status, NULL)
+             || strcmp(supp_status, "running") != 0) {
+@@ -633,6 +1092,7 @@ int wifi_send_command(struct wpa_ctrl *ctrl, const char *cmd, char *reply, size_
+         LOGV("Not connected to wpa_supplicant - \"%s\" command dropped.\n", cmd);
+         return -1;
+     }
++    memset(reply, 0, *reply_len);
+     ret = wpa_ctrl_request(ctrl, cmd, strlen(cmd), reply, reply_len, NULL);
+     if (ret == -2) {
+         LOGD("'%s' command timed out.\n", cmd);
+@@ -782,6 +1242,9 @@ int wifi_change_fw_path(const char *fwpath)
+     int fd;
+     int ret = 0;
+ 
++    // TODO: need a better way to get driver_firmware_path dynamically !
++    return ret;
++
+     if (!fwpath)
+         return ret;
+     fd = open(WIFI_DRIVER_FW_PATH_PARAM, O_WRONLY);
