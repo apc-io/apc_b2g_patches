@@ -46,7 +46,7 @@ REPO="${REPO:-repo}"
 #B2G_PATCH_DIRS=${B2G_PATCH_DIRS_OVERRIDE:-device/qcom/b2g_common/patch}
 B2G_PATCH_DIRS=${B2G_PATCH_DIRS_OVERRIDE}
 echo "B2G_PATCH_DIRS: ${B2G_PATCH_DIRS}"
-
+FORCE=1
 __tree_md5sum()
 {
 #echo "tree_md5sum"
@@ -195,7 +195,7 @@ __patch_tree()
             (
                set -e
                if branch ${PRJ} ; then
-                  if [[ $1 != "force" && $(whoami) != "lnxbuild" ]]; then
+                  if [[ $1 != "force" && $(whoami) != "lnxbuild" && $FORCE != 1 ]]; then
                      if [[ -n $(git status --porcelain) ]]; then
                         echo "ERROR: You have uncommited changes in ${PRJ}"
                         echo "You may force overwriting these changes"
