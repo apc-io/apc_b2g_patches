@@ -1,0 +1,113 @@
+From 6aa8af8542d19d3e9b28e8009ceba524d107203c Mon Sep 17 00:00:00 2001
+From: Nguyen Thanh Trung <nguyenthanh.trung@nomovok.vn>
+Date: Fri, 29 Nov 2013 10:23:54 +0700
+Subject: [PATCH] support external storage with ntfs partition
+
+---
+ Fat.cpp |   46 +++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 41 insertions(+), 5 deletions(-)
+
+diff --git a/Fat.cpp b/Fat.cpp
+index 82a3f7a..51823e8 100644
+--- a/Fat.cpp
++++ b/Fat.cpp
+@@ -44,14 +44,20 @@ static char FSCK_MSDOS_PATH[] = "/system/bin/fsck_msdos";
+ static char MKDOSFS_PATH[] = "/system/bin/newfs_msdos";
+ extern "C" int logwrap(int argc, const char **argv, int background);
+ extern "C" int mount(const char *, const char *, const char *, unsigned long, const void *);
++// WMT changes
++bool is_ntfs = false;
++// nguyenthanh.trung@nomovok.vn
++static bool fsck_msdos_found = false;
+ 
+ int Fat::check(const char *fsPath) {
+     bool rw = true;
++	is_ntfs = false;
+     if (access(FSCK_MSDOS_PATH, X_OK)) {
+         SLOGW("Skipping fs checks\n");
+         return 0;
+     }
+ 
++    fsck_msdos_found = true;
+     int pass = 1;
+     int rc = 0;
+     do {
+@@ -71,6 +77,7 @@ int Fat::check(const char *fsPath) {
+ 
+         case 2:
+             SLOGE("Filesystem check failed (not a FAT filesystem)");
++			goto check_ntfs;
+             errno = ENODATA;
+             return -1;
+ 
+@@ -91,6 +98,8 @@ int Fat::check(const char *fsPath) {
+         }
+     } while (0);
+ 
++check_ntfs:
++	is_ntfs = true;
+     return 0;
+ }
+ 
+@@ -101,11 +110,16 @@ int Fat::doMount(const char *fsPath, const char *mountPoint,
+     unsigned long flags;
+     char mountData[255];
+ 
+-    flags = MS_NODEV | MS_NOSUID | MS_DIRSYNC;
++    // WMT changes
++	if(is_ntfs){
++		flags = 0x8000;
++	}else{
++        flags = MS_NODEV | MS_NOSUID | MS_DIRSYNC;
+ 
+-    flags |= (executable ? 0 : MS_NOEXEC);
+-    flags |= (ro ? MS_RDONLY : 0);
+-    flags |= (remount ? MS_REMOUNT : 0);
++        flags |= (executable ? 0 : MS_NOEXEC);
++        flags |= (ro ? MS_RDONLY : 0);
++        flags |= (remount ? MS_REMOUNT : 0);
++	}
+ 
+     /*
+      * Note: This is a temporary hack. If the sampling profiler is enabled,
+@@ -125,7 +139,15 @@ int Fat::doMount(const char *fsPath, const char *mountPoint,
+             "utf8,uid=%d,gid=%d,fmask=%o,dmask=%o,shortname=mixed",
+             ownerUid, ownerGid, permMask, permMask);
+ 
+-    rc = mount(fsPath, mountPoint, "vfat", flags, mountData);
++    // WMT changes
++	if(is_ntfs){
++		char cmd[256];
++		sprintf(cmd,"/bin/ntfs-3g %s %s -o %s\n",fsPath, mountPoint,mountData);
++    	system(cmd);
++		rc = 0;
++	} else {
++        rc = mount(fsPath, mountPoint, "vfat", flags, mountData);
++    }
+ 
+     if (rc && errno == EROFS) {
+         SLOGE("%s appears to be a read only filesystem - retrying mount RO", fsPath);
+@@ -133,6 +155,20 @@ int Fat::doMount(const char *fsPath, const char *mountPoint,
+         rc = mount(fsPath, mountPoint, "vfat", flags, mountData);
+     }
+ 
++    // nguyenthanh.trung@nomovok.vn
++    if (rc && !fsck_msdos_found) {
++        // ok, so we'll try ntfs-3g to see if we can mount it
++        const char *args[6];
++        args[0] = "/bin/ntfs-3g";
++        args[1] = fsPath;
++        args[2] = mountPoint;
++        args[3] = "-o";
++        args[4] = mountData;
++        args[5] = NULL;
++
++        rc = logwrap(5, args, 1);
++    }
++
+     if (rc == 0 && createLost) {
+         char *lost_path;
+         asprintf(&lost_path, "%s/LOST.DIR", mountPoint);
+-- 
+1.7.9.5
+
