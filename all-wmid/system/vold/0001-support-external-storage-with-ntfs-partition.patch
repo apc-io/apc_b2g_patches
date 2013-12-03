@@ -1,6 +1,6 @@
-From 6aa8af8542d19d3e9b28e8009ceba524d107203c Mon Sep 17 00:00:00 2001
+From 56f4c78414b5d9e2444cb151c7fc9cca2cfca2bd Mon Sep 17 00:00:00 2001
 From: Nguyen Thanh Trung <nguyenthanh.trung@nomovok.vn>
-Date: Fri, 29 Nov 2013 10:23:54 +0700
+Date: Thu, 12 Dec 2013 14:44:58 +0700
 Subject: [PATCH] support external storage with ntfs partition
 
 ---
@@ -8,7 +8,7 @@ Subject: [PATCH] support external storage with ntfs partition
  1 file changed, 41 insertions(+), 5 deletions(-)
 
 diff --git a/Fat.cpp b/Fat.cpp
-index 82a3f7a..51823e8 100644
+index 82a3f7a..c1a6cbf 100644
 --- a/Fat.cpp
 +++ b/Fat.cpp
 @@ -44,14 +44,20 @@ static char FSCK_MSDOS_PATH[] = "/system/bin/fsck_msdos";
@@ -22,7 +22,7 @@ index 82a3f7a..51823e8 100644
  
  int Fat::check(const char *fsPath) {
      bool rw = true;
-+	is_ntfs = false;
++    is_ntfs = false;
      if (access(FSCK_MSDOS_PATH, X_OK)) {
          SLOGW("Skipping fs checks\n");
          return 0;
@@ -36,7 +36,7 @@ index 82a3f7a..51823e8 100644
  
          case 2:
              SLOGE("Filesystem check failed (not a FAT filesystem)");
-+			goto check_ntfs;
++            goto check_ntfs;
              errno = ENODATA;
              return -1;
  
@@ -45,7 +45,7 @@ index 82a3f7a..51823e8 100644
      } while (0);
  
 +check_ntfs:
-+	is_ntfs = true;
++    is_ntfs = true;
      return 0;
  }
  
@@ -55,9 +55,9 @@ index 82a3f7a..51823e8 100644
  
 -    flags = MS_NODEV | MS_NOSUID | MS_DIRSYNC;
 +    // WMT changes
-+	if(is_ntfs){
-+		flags = 0x8000;
-+	}else{
++    if (is_ntfs) {
++        flags = 0x8000;
++    } else {
 +        flags = MS_NODEV | MS_NOSUID | MS_DIRSYNC;
  
 -    flags |= (executable ? 0 : MS_NOEXEC);
@@ -66,7 +66,7 @@ index 82a3f7a..51823e8 100644
 +        flags |= (executable ? 0 : MS_NOEXEC);
 +        flags |= (ro ? MS_RDONLY : 0);
 +        flags |= (remount ? MS_REMOUNT : 0);
-+	}
++    }
  
      /*
       * Note: This is a temporary hack. If the sampling profiler is enabled,
@@ -76,12 +76,12 @@ index 82a3f7a..51823e8 100644
  
 -    rc = mount(fsPath, mountPoint, "vfat", flags, mountData);
 +    // WMT changes
-+	if(is_ntfs){
-+		char cmd[256];
-+		sprintf(cmd,"/bin/ntfs-3g %s %s -o %s\n",fsPath, mountPoint,mountData);
-+    	system(cmd);
-+		rc = 0;
-+	} else {
++    if (is_ntfs) {
++        char cmd[256];
++        sprintf(cmd, "/bin/ntfs-3g %s %s -o %s\n", fsPath, mountPoint, mountData);
++        system(cmd);
++        rc = 0;
++    } else {
 +        rc = mount(fsPath, mountPoint, "vfat", flags, mountData);
 +    }
  
