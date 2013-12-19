@@ -1,0 +1,176 @@
+From 8fee5dfe3412fa6a073cc3fc175437103805e539 Mon Sep 17 00:00:00 2001
+From: Phan Van Tuong <phanvan.tuong@nomovok.vn>
+Date: Mon, 13 Jan 2014 16:48:34 +0700
+Subject: [PATCH] support usb bluetooth dongle
+
+---
+ bluedroid/bluetooth.c |  102 ++++---------------------------------------------
+ 1 file changed, 8 insertions(+), 94 deletions(-)
+
+diff --git a/bluedroid/bluetooth.c b/bluedroid/bluetooth.c
+index 4cc9204..10a0303 100644
+--- a/bluedroid/bluetooth.c
++++ b/bluedroid/bluetooth.c
+@@ -36,6 +36,7 @@
+ #define HCI_DEV_ID 0
+ #endif
+ 
++#define HCID_START_DELAY_SEC 3
+ #define HCID_STOP_DELAY_USEC 500000
+ 
+ #define MIN(x,y) (((x)<(y))?(x):(y))
+@@ -46,94 +47,15 @@ static char *rfkill_state_path = NULL;
+ 
+ 
+ static int init_rfkill() {
+-    char path[64];
+-    char buf[16];
+-    int fd;
+-    int sz;
+-    int id;
+-    for (id = 0; ; id++) {
+-        snprintf(path, sizeof(path), "/sys/class/rfkill/rfkill%d/type", id);
+-        fd = open(path, O_RDONLY);
+-        if (fd < 0) {
+-            LOGW("open(%s) failed: %s (%d)\n", path, strerror(errno), errno);
+-            return -1;
+-        }
+-        sz = read(fd, &buf, sizeof(buf));
+-        close(fd);
+-        if (sz >= 9 && memcmp(buf, "bluetooth", 9) == 0) {
+-            rfkill_id = id;
+-            break;
+-        }
+-    }
+-
+-    asprintf(&rfkill_state_path, "/sys/class/rfkill/rfkill%d/state", rfkill_id);
+     return 0;
+ }
+ 
+ static int check_bluetooth_power() {
+-    int sz;
+-    int fd = -1;
+-    int ret = -1;
+-    char buffer;
+-
+-    if (rfkill_id == -1) {
+-        if (init_rfkill()) goto out;
+-    }
+-
+-    fd = open(rfkill_state_path, O_RDONLY);
+-    if (fd < 0) {
+-        LOGE("open(%s) failed: %s (%d)", rfkill_state_path, strerror(errno),
+-             errno);
+-        goto out;
+-    }
+-    sz = read(fd, &buffer, 1);
+-    if (sz != 1) {
+-        LOGE("read(%s) failed: %s (%d)", rfkill_state_path, strerror(errno),
+-             errno);
+-        goto out;
+-    }
+-
+-    switch (buffer) {
+-    case '1':
+-        ret = 1;
+-        break;
+-    case '0':
+-        ret = 0;
+-        break;
+-    }
+-
+-out:
+-    if (fd >= 0) close(fd);
+-    return ret;
++    return 1;
+ }
+ 
+ static int set_bluetooth_power(int on) {
+-    int sz;
+-    int fd = -1;
+-    int ret = -1;
+-    const char buffer = (on ? '1' : '0');
+-
+-    if (rfkill_id == -1) {
+-        if (init_rfkill()) goto out;
+-    }
+-
+-    fd = open(rfkill_state_path, O_WRONLY);
+-    if (fd < 0) {
+-        LOGE("open(%s) for write failed: %s (%d)", rfkill_state_path,
+-             strerror(errno), errno);
+-        goto out;
+-    }
+-    sz = write(fd, &buffer, 1);
+-    if (sz < 0) {
+-        LOGE("write(%s) failed: %s (%d)", rfkill_state_path, strerror(errno),
+-             errno);
+-        goto out;
+-    }
+-    ret = 0;
+-
+-out:
+-    if (fd >= 0) close(fd);
+-    return ret;
++    return 0;
+ }
+ 
+ static inline int create_hci_sock() {
+@@ -153,16 +75,13 @@ int bt_enable() {
+     int attempt;
+ 
+     if (set_bluetooth_power(1) < 0) goto out;
+-
+-    LOGI("Starting hciattach daemon");
++    
+     if (property_set("ctl.start", "hciattach") < 0) {
+         LOGE("Failed to start hciattach");
+         set_bluetooth_power(0);
+         goto out;
+     }
+-
+-    // Try for 10 seconds, this can only succeed once hciattach has sent the
+-    // firmware and then turned on hci device via HCIUARTSETPROTO ioctl
++    
+     for (attempt = 1000; attempt > 0;  attempt--) {
+         hci_sock = create_hci_sock();
+         if (hci_sock < 0) goto out;
+@@ -180,6 +99,7 @@ int bt_enable() {
+         close(hci_sock);
+         usleep(100000);  // 100 ms retry delay
+     }
++    
+     if (attempt == 0) {
+         LOGE("%s: Timeout waiting for HCI device to come up, error- %d, ",
+             __FUNCTION__, ret);
+@@ -189,7 +109,7 @@ int bt_enable() {
+         set_bluetooth_power(0);
+         goto out;
+     }
+-
++    
+     LOGI("Starting bluetoothd deamon");
+     if (property_set("ctl.start", "bluetoothd") < 0) {
+         LOGE("Failed to start bluetoothd");
+@@ -216,17 +136,11 @@ int bt_disable() {
+         goto out;
+     }
+     usleep(HCID_STOP_DELAY_USEC);
+-
++    
+     hci_sock = create_hci_sock();
+     if (hci_sock < 0) goto out;
+     ioctl(hci_sock, HCIDEVDOWN, HCI_DEV_ID);
+ 
+-    LOGI("Stopping hciattach deamon");
+-    if (property_set("ctl.stop", "hciattach") < 0) {
+-        LOGE("Error stopping hciattach");
+-        goto out;
+-    }
+-
+     if (set_bluetooth_power(0) < 0) {
+         goto out;
+     }
+-- 
+1.7.9.5
+
