@@ -1,0 +1,77 @@
+From 75dcffa56736ed42aa5bf26f7669cbde026b3424 Mon Sep 17 00:00:00 2001
+From: Nguyen Thanh Trung <nguyenthanh.trung@nomovok.vn>
+Date: Fri, 10 Jan 2014 11:26:26 +0700
+Subject: [PATCH] support rtk8723au driver
+
+---
+ wifi/wifi.c |   19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/wifi/wifi.c b/wifi/wifi.c
+index c6c085e..b968914 100644
+--- a/wifi/wifi.c
++++ b/wifi/wifi.c
+@@ -90,6 +90,8 @@ static char iface[PROPERTY_VALUE_MAX];
+ // Realtek wifi module paths
+ #define  WIFI_DRIVER_MODULE_PATH_REALTEK       "/lib/modules/rtl8188.ko"
+ 
++#define  WIFI_DRIVER_MODULE_PATH_RTK8723       "/lib/modules/3.0.8/kernel/drivers/net/wireless/rtl8723a/8723au.ko"
++
+ // Ralink 5572 wifi module paths
+ #define  WIFI_DRIVER_MODULE_PATH_RT5572        "/lib/modules/rt5572sta.ko"
+ 
+@@ -121,6 +123,7 @@ static char iface[PROPERTY_VALUE_MAX];
+ 
+ // Realtek wifi module names
+ #define  WIFI_DRIVER_MODULE_NAME_REALTEK       "rtl8188"
++#define  WIFI_DRIVER_MODULE_NAME_RTK8723       "8723au"
+ 
+ // Ralink 5572 wifi module names
+ #define  WIFI_DRIVER_MODULE_NAME_RT5572        "rt5572sta"
+@@ -159,6 +162,7 @@ static char DRIVER_MODULE_TAG_RALINK[32];
+ static const char DRIVER_MODULE_TAG_ATHEROS[]   = WIFI_DRIVER_MODULE_NAME_ATHEROS_8;
+ static const char DRIVER_MODULE_TAG_MARVELL[]   = WIFI_DRIVER_MODULE_NAME_MARVELL_2;
+ static const char DRIVER_MODULE_TAG_REALTEK[]   = WIFI_DRIVER_MODULE_NAME_REALTEK;
++static const char DRIVER_MODULE_TAG_RTK8723[]   = WIFI_DRIVER_MODULE_NAME_RTK8723;
+ static char DRIVER_MODULE_TAG_BROADCOM[32];
+ 
+ static const char DRIVER_MODULE_ARG[]   = WIFI_DRIVER_MODULE_ARG;
+@@ -482,6 +486,12 @@ int is_wifi_driver_loaded(int loading) {
+ 					return 1;
+ 				}
+ 			} break;
++			case 8723: {
++				if (strncmp(line, DRIVER_MODULE_TAG_RTK8723, strlen(DRIVER_MODULE_TAG_RTK8723)) == 0) {
++					fclose(proc);
++					return 1;
++				}
++			} break;
+ 			default:
+ 				return 0;
+ 			break;
+@@ -590,6 +600,12 @@ int wifi_load_driver()
+ 			if (insmod(WIFI_DRIVER_MODULE_PATH_BROADCOM, DRIVER_MODULE_ARG) < 0)
+ 				return -1;
+ 		} break;
++		case 8723: {
++			if (insmod(WIFI_DRIVER_MODULE_PATH_RTK8723, DRIVER_MODULE_ARG) < 0) {
++				LOGE("load wifi module %s fail", WIFI_DRIVER_MODULE_PATH_RTK8723);
++				return -1;
++			}
++		} break;
+ 		default:
+ 			break;
+ 	}
+@@ -686,6 +702,9 @@ int wifi_unload_driver()
+ 			usleep(10000);
+ 			rmmod(WIFI_DRIVER_MODULE_NAME_CFG80211);
+ 		} break;
++		case 8723: {
++			status = rmmod(WIFI_DRIVER_MODULE_NAME_RTK8723);
++		} break;
+ 		default:
+ 			break;
+ 	}
+-- 
+1.7.9.5
+
