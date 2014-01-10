@@ -1,0 +1,27 @@
+From b8e07c58ce77c22809e4c0fc967b6ea9e30f7bf0 Mon Sep 17 00:00:00 2001
+From: Phan Van Tuong <phanvan.tuong@nomovok.vn>
+Date: Fri, 10 Jan 2014 11:32:38 +0700
+Subject: [PATCH] Fix bug of bluetooth
+
+---
+ bluedroid/bluetooth.c |    4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/bluedroid/bluetooth.c b/bluedroid/bluetooth.c
+index de6fd0b..c9b551e 100644
+--- a/bluedroid/bluetooth.c
++++ b/bluedroid/bluetooth.c
+@@ -112,6 +112,10 @@ int bt_disable() {
+         goto out;
+     }
+     usleep(HCID_STOP_DELAY_USEC);
++    
++    hci_sock = create_hci_sock();
++    if (hci_sock < 0) goto out;
++    ioctl(hci_sock, HCIDEVDOWN, HCI_DEV_ID);
+ 
+     if (set_bluetooth_power(0) < 0) {
+         goto out;
+-- 
+1.7.9.5
+
