@@ -1,14 +1,14 @@
-From 8fee5dfe3412fa6a073cc3fc175437103805e539 Mon Sep 17 00:00:00 2001
+From ed8b0a5c69106895b0cc6f45134ecd2805216093 Mon Sep 17 00:00:00 2001
 From: Phan Van Tuong <phanvan.tuong@nomovok.vn>
-Date: Mon, 13 Jan 2014 16:48:34 +0700
+Date: Wed, 22 Jan 2014 14:59:59 +0700
 Subject: [PATCH] support usb bluetooth dongle
 
 ---
- bluedroid/bluetooth.c |  102 ++++---------------------------------------------
- 1 file changed, 8 insertions(+), 94 deletions(-)
+ bluedroid/bluetooth.c |  130 ++-----------------------------------------------
+ 1 file changed, 5 insertions(+), 125 deletions(-)
 
 diff --git a/bluedroid/bluetooth.c b/bluedroid/bluetooth.c
-index 4cc9204..10a0303 100644
+index 4cc9204..58c1a60 100644
 --- a/bluedroid/bluetooth.c
 +++ b/bluedroid/bluetooth.c
 @@ -36,6 +36,7 @@
@@ -116,43 +116,52 @@ index 4cc9204..10a0303 100644
  }
  
  static inline int create_hci_sock() {
-@@ -153,16 +75,13 @@ int bt_enable() {
+@@ -153,43 +75,7 @@ int bt_enable() {
      int attempt;
  
      if (set_bluetooth_power(1) < 0) goto out;
 -
 -    LOGI("Starting hciattach daemon");
-+    
-     if (property_set("ctl.start", "hciattach") < 0) {
-         LOGE("Failed to start hciattach");
-         set_bluetooth_power(0);
-         goto out;
-     }
+-    if (property_set("ctl.start", "hciattach") < 0) {
+-        LOGE("Failed to start hciattach");
+-        set_bluetooth_power(0);
+-        goto out;
+-    }
 -
 -    // Try for 10 seconds, this can only succeed once hciattach has sent the
 -    // firmware and then turned on hci device via HCIUARTSETPROTO ioctl
-+    
-     for (attempt = 1000; attempt > 0;  attempt--) {
-         hci_sock = create_hci_sock();
-         if (hci_sock < 0) goto out;
-@@ -180,6 +99,7 @@ int bt_enable() {
-         close(hci_sock);
-         usleep(100000);  // 100 ms retry delay
-     }
-+    
-     if (attempt == 0) {
-         LOGE("%s: Timeout waiting for HCI device to come up, error- %d, ",
-             __FUNCTION__, ret);
-@@ -189,7 +109,7 @@ int bt_enable() {
-         set_bluetooth_power(0);
-         goto out;
-     }
+-    for (attempt = 1000; attempt > 0;  attempt--) {
+-        hci_sock = create_hci_sock();
+-        if (hci_sock < 0) goto out;
+-
+-        ret = ioctl(hci_sock, HCIDEVUP, HCI_DEV_ID);
+-
+-        LOGI("bt_enable: ret: %d, errno: %d", ret, errno);
+-        if (!ret) {
+-            break;
+-        } else if (errno == EALREADY) {
+-            LOGW("Bluetoothd already started, unexpectedly!");
+-            break;
+-        }
+-
+-        close(hci_sock);
+-        usleep(100000);  // 100 ms retry delay
+-    }
+-    if (attempt == 0) {
+-        LOGE("%s: Timeout waiting for HCI device to come up, error- %d, ",
+-            __FUNCTION__, ret);
+-        if (property_set("ctl.stop", "hciattach") < 0) {
+-            LOGE("Error stopping hciattach");
+-        }
+-        set_bluetooth_power(0);
+-        goto out;
+-    }
 -
 +    
      LOGI("Starting bluetoothd deamon");
      if (property_set("ctl.start", "bluetoothd") < 0) {
          LOGE("Failed to start bluetoothd");
-@@ -216,17 +136,11 @@ int bt_disable() {
+@@ -216,17 +102,11 @@ int bt_disable() {
          goto out;
      }
      usleep(HCID_STOP_DELAY_USEC);
