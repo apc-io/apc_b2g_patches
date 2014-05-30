@@ -1,0 +1,28 @@
+From 301c0fd8e4f8fbdd64fa7b61a7112d7f4b67211c Mon Sep 17 00:00:00 2001
+From: Nguyen Thanh Trung <nguyenthanh.trung@nomovok.vn>
+Date: Wed, 11 Dec 2013 16:14:19 +0700
+Subject: [PATCH] fixed params of format partition in updater script
+
+---
+ tools/releasetools/edify_generator.py |    4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/releasetools/edify_generator.py b/tools/releasetools/edify_generator.py
+index 12bb48b..d7b924b 100644
+--- a/tools/releasetools/edify_generator.py
++++ b/tools/releasetools/edify_generator.py
+@@ -165,9 +165,9 @@ class EdifyGenerator(object):
+     fstab = self.info.get("fstab", None)
+     if fstab:
+       p = fstab[partition]
+-      self.script.append('format("%s", "%s", "%s", "%s", "%s");' %
++      self.script.append('format("%s", "%s", "%s", "%s");' %
+                          (p.fs_type, common.PARTITION_TYPES[p.fs_type],
+-                          p.device, p.length, p.mount_point))
++                          p.device, p.length))
+ 
+   def DeleteFiles(self, file_list):
+     """Delete all files in file_list."""
+-- 
+1.7.9.5
+

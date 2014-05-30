@@ -1,0 +1,46 @@
+From 3998c1b8aac049d4ccd364fc561d012995b4153f Mon Sep 17 00:00:00 2001
+From: Nguyen Thanh Trung <nguyenthanh.trung@nomovok.vn>
+Date: Fri, 22 Nov 2013 11:33:50 +0700
+Subject: [PATCH] disable adding security key to build version tags
+
+---
+ core/Makefile |   18 +++++++++---------
+ 1 file changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/core/Makefile b/core/Makefile
+index 956a074..8913c19 100644
+--- a/core/Makefile
++++ b/core/Makefile
+@@ -74,20 +74,20 @@ ADDITIONAL_BUILD_PROPERTIES := $(call uniq-pairs-by-first-component, \
+ # A list of arbitrary tags describing the build configuration.
+ # Force ":=" so we can use +=
+ BUILD_VERSION_TAGS := $(BUILD_VERSION_TAGS)
+-ifeq ($(TARGET_BUILD_TYPE),debug)
+-  BUILD_VERSION_TAGS += debug
+-endif
++#ifeq ($(TARGET_BUILD_TYPE),debug)
++#  BUILD_VERSION_TAGS += debug
++#endif
+ # The "test-keys" tag marks builds signed with the old test keys,
+ # which are available in the SDK.  "dev-keys" marks builds signed with
+ # non-default dev keys (usually private keys from a vendor directory).
+ # Both of these tags will be removed and replaced with "release-keys"
+ # when the target-files is signed in a post-build step.
+-ifeq ($(DEFAULT_SYSTEM_DEV_CERTIFICATE),build/target/product/security/testkey)
+-BUILD_VERSION_TAGS += test-keys
+-else
+-BUILD_VERSION_TAGS += dev-keys
+-endif
+-BUILD_VERSION_TAGS := $(subst $(space),$(comma),$(sort $(BUILD_VERSION_TAGS)))
++#ifeq ($(DEFAULT_SYSTEM_DEV_CERTIFICATE),build/target/product/security/testkey)
++#BUILD_VERSION_TAGS += test-keys
++#else
++#BUILD_VERSION_TAGS += dev-keys
++#endif
++#BUILD_VERSION_TAGS := $(subst $(space),$(comma),$(sort $(BUILD_VERSION_TAGS)))
+ 
+ # A human-readable string that descibes this build in detail.
+ build_desc := $(TARGET_PRODUCT)-$(TARGET_BUILD_VARIANT) $(PLATFORM_VERSION) $(BUILD_ID) $(BUILD_NUMBER) $(BUILD_VERSION_TAGS)
+-- 
+1.7.9.5
+
